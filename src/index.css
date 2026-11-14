@@ -151,6 +151,52 @@ input[type='color']::-webkit-color-swatch {
   animation: kenburns-out var(--cut-duration, 4s) linear both;
 }
 
+/* 컷별 카메라 무빙 — MP4의 zoompan과 같은 느낌으로 */
+@keyframes cam-push {
+  from {
+    transform: scale(1.02) translate3d(0, 1%, 0);
+  }
+  to {
+    transform: scale(1.14) translate3d(0, -1%, 0);
+  }
+}
+@keyframes cam-pull {
+  from {
+    transform: scale(1.16) translate3d(0, -1%, 0);
+  }
+  to {
+    transform: scale(1.02) translate3d(0, 1%, 0);
+  }
+}
+@keyframes cam-punch {
+  from {
+    transform: scale(1.28) translate3d(6%, 6%, 0);
+  }
+  to {
+    transform: scale(1.46) translate3d(-4%, 1%, 0);
+  }
+}
+@keyframes cam-drift {
+  from {
+    transform: scale(1.16) translate3d(9%, 3%, 0);
+  }
+  to {
+    transform: scale(1.32) translate3d(-9%, -1%, 0);
+  }
+}
+.cam-push {
+  animation: cam-push var(--cut-duration, 4s) linear both;
+}
+.cam-pull {
+  animation: cam-pull var(--cut-duration, 4s) linear both;
+}
+.cam-punch {
+  animation: cam-punch var(--cut-duration, 4s) linear both;
+}
+.cam-drift {
+  animation: cam-drift var(--cut-duration, 4s) linear both;
+}
+
 @keyframes sub-pop {
   0% {
     opacity: 0;

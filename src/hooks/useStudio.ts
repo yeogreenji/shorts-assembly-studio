@@ -15,6 +15,7 @@ export function makeCut(partial: Partial<Cut> = {}): Cut {
     narration: '',
     duration: 4,
     theme: 'sunset',
+    camera: 'auto',
     image: null,
     audio: null,
     ...partial,

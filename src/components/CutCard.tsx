@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import type { Cut, CutRole, ThemeId } from '../types';
-import { THEMES, cutRoleLabel } from '../lib/presets';
+import type { Cut, CutCamera, CutRole, ThemeId } from '../types';
+import { CAMERA_OPTIONS, THEMES, cutRoleLabel } from '../lib/presets';
 import { fileToAsset } from '../lib/media';
 import { startRecording, type ActiveRecording } from '../lib/recorder';
 import { speak, stopSpeaking } from '../lib/tts';
@@ -244,6 +244,25 @@ export function CutCard({
             }`}
             style={{ background: `linear-gradient(135deg, ${theme.from}, ${theme.to})` }}
           />
+        ))}
+
+        <span className="mx-0.5 h-4 w-px bg-white/10" />
+
+        <span className="text-[10px] text-zinc-600">카메라</span>
+        {CAMERA_OPTIONS.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            title={option.hint}
+            onClick={() => onChange({ camera: option.id as CutCamera })}
+            className={`rounded-md border px-1.5 py-0.5 text-[10px] transition ${
+              (cut.camera ?? 'auto') === option.id
+                ? 'border-brand-400/60 bg-brand-500/15 text-brand-200'
+                : 'border-white/10 text-zinc-500 hover:border-white/25 hover:text-zinc-200'
+            }`}
+          >
+            {option.label}
+          </button>
         ))}
 
         <span className="mx-0.5 h-4 w-px bg-white/10" />

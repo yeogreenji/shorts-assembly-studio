@@ -2,6 +2,8 @@ export type SubtitlePosition = 'top' | 'middle' | 'bottom';
 export type BgmMood = 'calm' | 'upbeat' | 'tense' | 'playful' | 'none';
 export type ThemeId = 'sunset' | 'night' | 'mint' | 'mono' | 'candy';
 export type CutRole = 'hook' | 'body' | 'cta';
+/** 컷 배경의 카메라 무빙. auto는 컷 순서에 맞춰 자동으로 정합니다. */
+export type CutCamera = 'auto' | 'push' | 'pull' | 'punch' | 'drift';
 
 export interface Theme {
   id: ThemeId;
@@ -28,6 +30,8 @@ export interface Cut {
   narration: string;
   duration: number;
   theme: ThemeId;
+  /** 배경 카메라 무빙 — 같은 그림을 두 컷에 써도 다른 화면처럼 보입니다 */
+  camera?: CutCamera;
   image: MediaAsset | null;
   audio: MediaAsset | null;
 }
@@ -126,6 +130,7 @@ export interface RenderCut {
   narration: string;
   duration: number;
   theme: ThemeId;
+  camera?: CutCamera;
   image: MediaAsset | null;
   audio: MediaAsset | null;
 }

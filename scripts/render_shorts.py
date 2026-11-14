@@ -56,10 +56,12 @@ THEMES = {
 BGM_MOODS = {
     "calm": dict(bpm=68, chords=[[0, 3, 7], [-2, 3, 5], [-4, 0, 3], [-5, -1, 2]],
                  pad=0.20, arp=True, kick=False, bright=0.35),
-    "upbeat": dict(bpm=118, chords=[[0, 4, 7], [5, 9, 12], [7, 11, 14], [3, 7, 10]],
-                   pad=0.16, arp=True, kick=True, bright=0.8),
-    "playful": dict(bpm=104, chords=[[0, 4, 7], [2, 5, 9], [4, 7, 11], [0, 5, 7]],
-                    pad=0.15, arp=True, kick=True, bright=0.7),
+    "upbeat": dict(bpm=124, chords=[[0, 4, 7], [5, 9, 12], [7, 11, 14], [3, 7, 10]],
+                   pad=0.12, arp=True, kick=True, bright=0.85,
+                   groove=dict(kick=[0, 1, 2, 3], clap=[1, 3], hat=2, bass=0.13)),
+    "playful": dict(bpm=116, chords=[[0, 4, 7], [2, 5, 9], [4, 7, 11], [0, 5, 7]],
+                    pad=0.12, arp=True, kick=True, bright=0.78,
+                    groove=dict(kick=[0, 2], clap=[1, 3], hat=2, bass=0.11)),
     "tense": dict(bpm=76, chords=[[0, 1, 7], [0, 1, 6], [-1, 0, 6], [0, 1, 7]],
                   pad=0.22, arp=False, kick=False, bright=0.15),
 }
@@ -102,6 +104,18 @@ KOREAN_TTS_VOICES = {
     "ko-KR-HyunsuMultilingualNeural": "현수 · 남성",
 }
 DEFAULT_TTS_VOICE = "ko-KR-SunHiNeural"
+# 쇼트폼 기본기: 조금 빠르고(+18%) 조금 높은(+5Hz) 목소리
+DEFAULT_TTS_RATE = 18.0
+DEFAULT_TTS_PITCH = 5.0
+
+# 컷별 카메라 무빙 — zoompan 식으로 풀어 씁니다.
+# z0/z1: 시작·끝 줌, x0/x1/y: 화면 안에서 바라보는 지점(0=왼쪽/위, 1=오른쪽/아래)
+CAMERA_MOVES = {
+    "push": dict(z0=1.00, z1=1.14, x0=0.50, x1=0.50, y=0.40),
+    "pull": dict(z0=1.16, z1=1.00, x0=0.50, x1=0.50, y=0.38),
+    "punch": dict(z0=1.30, z1=1.46, x0=0.28, x1=0.60, y=0.24),
+    "drift": dict(z0=1.16, z1=1.32, x0=0.20, x1=0.80, y=0.26),
+}
 
 SR = 22050  # BGM 합성 샘플레이트 (가볍게)
 BANNER_HEIGHT = 154  # 1080×1920 기준 상단 배너 높이(px)
@@ -312,6 +326,49 @@ def _add_kick(buf: list, start: int, sr: int = SR) -> None:
         buf[index] += SINE_TABLE[int(phase) & 4095] * 0.30 * env
 
 
+def _noise_burst(buf: list, start: int, length: float, gain: float, decay: float,
+                 smooth: float, seed: int, sr: int = SR) -> None:
+    """짧은 노이즈 버스트 — 하이햇·박수 소리를 코드로 만듭니다."""
+    total = len(buf)
+    n = max(1, int(length * sr))
+    state = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+    lp = 0.0
+    for i in range(n):
+        index = start + i
+        if index < 0:
+            continue
+        if index >= total:
+            break
+        state = (1103515245 * state + 12345) & 0x7FFFFFFF
+        noise = (state / 0x7FFFFFFF) * 2.0 - 1.0
+        lp += (noise - lp) * smooth
+        env = math.exp(-decay * i / n)
+        buf[index] += lp * gain * env
+
+
+def _add_hat(buf: list, start: int, gain: float = 0.05, sr: int = SR, seed: int = 7) -> None:
+    _noise_burst(buf, start, 0.045, gain, 26.0, 0.85, seed, sr=sr)
+
+
+def _add_clap(buf: list, start: int, gain: float = 0.09, sr: int = SR, seed: int = 11) -> None:
+    _noise_burst(buf, start, 0.13, gain, 12.0, 0.45, seed, sr=sr)
+
+
+def _add_bass(buf: list, start: int, note: float, gain: float = 0.12, sr: int = SR) -> None:
+    """짧게 끊기는 베이스 — 곡에 추진력을 줍니다."""
+    total = len(buf)
+    length = int(0.26 * sr)
+    step = note * 4096.0 / sr
+    phase = 0.0
+    for i in range(length):
+        index = start + i
+        if index >= total:
+            break
+        env = min(1.0, i / (0.01 * sr)) * math.exp(-5.5 * i / length)
+        buf[index] += SINE_TABLE[int(phase) & 4095] * gain * env
+        phase += step
+
+
 def make_bgm_wav(path: Path, mood: str, seconds: float, volume: float = 1.0) -> bool:
     config = BGM_MOODS.get(mood)
     if not config or seconds <= 0:
@@ -341,6 +398,22 @@ def make_bgm_wav(path: Path, mood: str, seconds: float, volume: float = 1.0) -> 
             for k in (0, 2):
                 _add_kick(buf, start + int(k * beat * sr), sr=sr)
 
+        groove = config.get("groove")
+        if groove:
+            for k in groove.get("kick", []):
+                _add_kick(buf, start + int(k * beat * sr), sr=sr)
+            for k in groove.get("clap", []):
+                _add_clap(buf, start + int(k * beat * sr), seed=b * 7 + k)
+            hat_rate = groove.get("hat", 0)
+            for e in range(4 * hat_rate):
+                _add_hat(buf, start + int(e * beat / hat_rate * sr), seed=b * 13 + e)
+            bass = groove.get("bass", 0.0)
+            if bass > 0:
+                for k in range(4):
+                    if k == 0 or k in groove.get("clap", []) or config["arp"]:
+                        note = base * (2 ** ((chord[0] - 24) / 12))
+                        _add_bass(buf, start + int(k * beat * sr), note, gain=bass)
+
         if config["arp"]:
             for e in range(8):
                 note = chord[e % len(chord)] + 12
@@ -348,8 +421,8 @@ def make_bgm_wav(path: Path, mood: str, seconds: float, volume: float = 1.0) -> 
                 _add_tone(buf, start + int(e * beat / 2 * sr), int(0.22 * sr), freq,
                           gain=0.075 * (1.0 - 0.04 * e), attack=0.006, release=0.16, sr=sr)
 
-    # 간단한 저역 통과로 부드럽게
-    alpha = 0.25 + 0.5 * config["bright"]
+    # 간단한 저역 통과로 부드럽게 (밝은 곡은 하이햇이 살아 있게 덜 깎습니다)
+    alpha = 0.22 + 0.62 * config["bright"]
     prev = 0.0
     for i in range(total):
         prev += (buf[i] - prev) * alpha
@@ -571,6 +644,7 @@ def normalize(raw: dict) -> dict:
             "narration": str(cut.get("narration") or ""),
             "duration": duration,
             "theme": cut.get("theme") if cut.get("theme") in THEMES else "sunset",
+            "camera": cut.get("camera") if cut.get("camera") in CAMERA_MOVES else "auto",
             "image": cut.get("image") or None,
             "audio": cut.get("audio") or None,
         })
@@ -604,8 +678,8 @@ def normalize(raw: dict) -> dict:
             "tts": {
                 "engine": str(tts.get("engine") or "edge"),
                 "voice": str(tts.get("voice") or DEFAULT_TTS_VOICE),
-                "ratePct": float(tts.get("ratePct") or 0.0),
-                "pitchHz": float(tts.get("pitchHz") or 0.0),
+                "ratePct": float(tts["ratePct"]) if tts.get("ratePct") is not None else DEFAULT_TTS_RATE,
+                "pitchHz": float(tts["pitchHz"]) if tts.get("pitchHz") is not None else DEFAULT_TTS_PITCH,
             },
         },
         "bgm": {
@@ -896,9 +970,10 @@ def prepare_tts(project: dict, ffmpeg: str, tmp: Path, voice_mode: str) -> tuple
 
         files[cut["index"]] = made
         length = probe_duration(ffmpeg, made) or 0.0
-        # 목소리가 잘리지 않게 컷을 늘립니다 (앞뒤 여백 포함)
-        if length + 0.55 > cut["duration"]:
-            cut["duration"] = min(30.0, round(length + 0.65, 2))
+        # 쇼츠 템포 보호: 15%까지는 목소리를 당겨서 컷 길이를 지키고,
+        # 그보다 길 때만 그 컷을 늘립니다 (잘림 방지).
+        if length > cut["duration"] * 1.15:
+            cut["duration"] = min(30.0, round(length + 0.25, 2))
 
     return files, warnings, engine
 
@@ -907,8 +982,9 @@ def build_segments(project: dict, ffmpeg: str, tmp: Path, base_dir: Path) -> tup
     width, height, fps = project["width"], project["height"], project["fps"]
     segments: list[Path] = []
     clock = 0.0
-    # 켄번즈를 위해 원본을 1.3배로 키워 둡니다 (확대해도 덜 뭉개지게)
-    big_w, big_h = int(width * 1.3) // 2 * 2, int(height * 1.3) // 2 * 2
+    # 켄번즈를 위해 원본을 1.45배로 키워 둡니다 (타이트한 펀치인에도 덜 뭉개지게)
+    big_w, big_h = int(width * 1.45) // 2 * 2, int(height * 1.45) // 2 * 2
+    total_cuts = len(project["cuts"])
 
     for cut in project["cuts"]:
         frames = max(2, int(round(cut["duration"] * fps)))
@@ -924,14 +1000,22 @@ def build_segments(project: dict, ffmpeg: str, tmp: Path, base_dir: Path) -> tup
             image_path = tmp / f"bg-{cut['index']:02d}.png"
             make_gradient_png(image_path, c_from, c_to)
 
-        step = 0.10 / max(1, frames)
-        if cut["index"] % 2 == 0:
-            zoom = f"min(1.0+{step:.6f}*on,1.12)"
-            pan_x = f"(iw-iw/zoom)*(0.5+0.26*on/{frames})"
-        else:
-            zoom = f"max(1.12-{step:.6f}*on,1.0)"
-            pan_x = f"(iw-iw/zoom)*(0.76-0.26*on/{frames})"
-        pan_y = f"(ih-ih/zoom)*{0.38 if cut['index'] % 2 == 0 else 0.32:.2f}"
+        move = cut.get("camera")
+        if move not in CAMERA_MOVES:
+            # camera가 없거나 auto면 컷 순서에 맞춰 자동으로 (미리보기와 같은 규칙)
+            if cut["index"] == 0:
+                move = "push"
+            elif cut["index"] == total_cuts - 1:
+                move = "pull"
+            elif cut["index"] % 2 == 1:
+                move = "push"
+            else:
+                move = "drift"
+        conf = CAMERA_MOVES[move]
+        span = max(1, frames - 1)
+        zoom = f"{conf['z0']:.3f}+{conf['z1'] - conf['z0']:.4f}*on/{span}"
+        pan_x = f"(iw-iw/zoom)*({conf['x0']:.3f}+{conf['x1'] - conf['x0']:.4f}*on/{span})"
+        pan_y = f"(ih-ih/zoom)*{conf['y']:.2f}"
 
         filter_complex = (
             f"[0:v]scale={big_w}:{big_h}:force_original_aspect_ratio=increase,"
@@ -992,15 +1076,16 @@ def build_audio(project: dict, ffmpeg: str, tmp: Path, tts_files: dict[int, Path
 
         voice_file = tts_files.get(cut["index"])
         if voice_file and engine != "none":
-            # 컷보다 목소리가 길면 살짝 빠르게(최대 1.18배) 당겨서라도 다 들리게 합니다.
+            # 목소리가 컷보다 길면 최대 1.18배까지 당겨서 컷 길이 안에 넣습니다 (템포 유지).
             voice_len = probe_duration(ffmpeg, voice_file) or 0.0
+            usable = max(0.3, duration - 0.16)
             speed = 1.0
-            if voice_len > duration * 0.97 and voice_len > 0:
-                speed = min(1.18, voice_len / max(0.4, duration * 0.94))
-            af = f"aresample=44100"
-            if abs(speed - 1.0) > 0.005:
+            if voice_len > usable and voice_len > 0:
+                speed = min(1.18, voice_len / usable)
+            af = "aresample=44100"
+            if speed > 1.005:
                 af += f",atempo={speed:.3f}"
-            af += f",adelay=90|90,apad,atrim=0:{duration:.3f},asetpts=N/SR/TB"
+            af += f",adelay=80|80,apad,atrim=0:{duration:.3f},asetpts=N/SR/TB"
             run([
                 ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
                 "-i", str(voice_file),
@@ -1047,7 +1132,9 @@ def main() -> None:
     parser.add_argument("--tts", default=None,
                         help=f"edge-tts 한국어 음성 (기본 {DEFAULT_TTS_VOICE}, 예: ko-KR-InJoonNeural)")
     parser.add_argument("--tts-rate", type=float, default=None,
-                        help="AI 목소리 속도 보정 %%. 예: 8 → +8%% (기본: 프로젝트 설정)")
+                        help=f"AI 목소리 속도 보정 %%. 예: 12 → +12%% (기본 +{DEFAULT_TTS_RATE:.0f}%%)")
+    parser.add_argument("--tts-pitch", type=float, default=None,
+                        help=f"AI 목소리 음높이 보정 Hz (기본 +{DEFAULT_TTS_PITCH:.0f}Hz)")
     parser.add_argument("--list-tts", action="store_true", help="쓸 수 있는 한국어 AI 목소리를 보여줍니다")
     parser.add_argument("--banner", default=None, help="상단 주제 배너 문구 (--no-banner로 끕니다)")
     parser.add_argument("--no-banner", action="store_true", help="상단 주제 배너를 넣지 않습니다")
@@ -1090,6 +1177,8 @@ def main() -> None:
         project["voice"]["tts"]["voice"] = args.tts
     if args.tts_rate is not None:
         project["voice"]["tts"]["ratePct"] = args.tts_rate
+    if args.tts_pitch is not None:
+        project["voice"]["tts"]["pitchHz"] = args.tts_pitch
 
     base_dir = project_path.parent.resolve()
     output = Path(args.output).expanduser() if args.output else project_path.with_suffix(".mp4")
@@ -1122,7 +1211,9 @@ def main() -> None:
         for warning in tts_warnings:
             log(f"  ! {warning}")
         if engine == "edge":
-            log(f"  · edge-tts 한국어 음성 사용: {project['voice']['tts']['voice']} ({len(tts_files)}컷)")
+            tts_conf = project["voice"]["tts"]
+            log(f"  · edge-tts 한국어 음성 사용: {tts_conf['voice']} "
+                f"({len(tts_files)}컷 · 속도 {tts_conf['ratePct']:+.0f}% · 음높이 {tts_conf['pitchHz']:+.0f}Hz)")
         elif engine == "espeak":
             log("  · espeak-ng 음성 사용 (edge-tts를 설치하면 훨씬 자연스럽습니다)")
         elif engine == "recorded":
@@ -1174,18 +1265,31 @@ def main() -> None:
         mix_inputs = ["-i", str(narration)]
         next_input = 1
         filters = []
-        labels = ["[0:a]"]
+        voice_label = "[0:a]"
+        labels = [voice_label]
         if mood in BGM_MOODS:
             bgm_path = tmp / "bgm.wav"
-            bgm_volume = project["bgm"]["volume"] * (1.0 if engine == "none" else 0.82)
+            # 스튜디오 볼륨(0~1)은 미리보기 기준이라 그대로 쓰면 MP4에서 너무 작습니다.
+            # 쇼츠 믹스에선 3배로 올려 깔고, 목소리 구간은 사이드체인으로 눌러 줍니다.
+            bgm_volume = min(1.0, project["bgm"]["volume"] * 3.0)
             if make_bgm_wav(bgm_path, mood, total, bgm_volume):
                 mix_inputs += ["-i", str(bgm_path)]
                 fade_out = max(0.1, total - 1.4)
                 filters.append(
                     f"[{next_input}:a]volume=1.0,afade=t=in:st=0:d=1.2,afade=t=out:st={fade_out:.2f}:d=1.4,"
-                    f"aformat=sample_rates=44100:channel_layouts=stereo[bg]"
+                    f"aformat=sample_rates=44100:channel_layouts=stereo[bgraw]"
                 )
-                labels.append("[bg]")
+                if engine != "none":
+                    # 목소리가 나올 때만 BGM을 눌러 줍니다(사이드체인 더킹) — 목소리는 또렷하게, BGM은 힘있게
+                    filters.insert(0, "[0:a]asplit=2[voice][key]")
+                    filters.append(
+                        "[bgraw][key]sidechaincompress=threshold=0.035:ratio=6:attack=15:release=320[bg]"
+                    )
+                    voice_label = "[voice]"
+                    labels = [voice_label, "[bg]"]
+                else:
+                    filters.append("[bgraw]anull[bg]")
+                    labels.append("[bg]")
                 next_input += 1
 
         if not args.no_sfx:
@@ -1206,6 +1310,8 @@ def main() -> None:
             filters.append(
                 f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:dropout_transition=0:normalize=0[a]"
             )
+        elif voice_label != "[0:a]":
+            filters.append(f"{voice_label}anull[a]")
         else:
             filters.append("[0:a]anull[a]")
 

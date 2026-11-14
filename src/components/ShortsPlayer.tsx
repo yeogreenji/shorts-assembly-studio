@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Project } from '../types';
-import { THEME_MAP } from '../lib/presets';
+import { THEME_MAP, defaultCamera } from '../lib/presets';
 import { cutStartTimes, formatClock, totalDuration } from '../lib/srt';
 import { parseHighlight, speak, stopSpeaking } from '../lib/tts';
 import { bgmPlayer } from '../lib/bgm';
@@ -146,6 +146,8 @@ export function ShortsPlayer({
   };
 
   const theme = cut ? THEME_MAP[cut.theme] : THEME_MAP.sunset;
+  const camera = cut && cut.camera && cut.camera !== 'auto' ? cut.camera : defaultCamera(activeIndex, project.cuts.length);
+  const cameraClass = `cam-${camera}`;
   const highlightStyle = { color: project.subtitle.highlight };
   // 쇼츠식 굵은 테두리 — 화면이 밝아도 글자가 살아 있게
   const stroke = Math.max(1.2, project.subtitle.outline * 0.9 * Math.max(0.5, scale * 3));
@@ -174,13 +176,13 @@ export function ShortsPlayer({
               key={cut.id}
               src={cut.image.dataUrl}
               alt=""
-              className={`absolute inset-0 h-full w-full object-cover ${activeIndex % 2 === 0 ? 'kb-in' : 'kb-out'}`}
+              className={`absolute inset-0 h-full w-full object-cover ${cameraClass}`}
               style={{ ['--cut-duration' as string]: `${cut.duration}s` }}
             />
           ) : (
             <div
               key={cut?.id ?? 'empty'}
-              className={`absolute inset-0 ${activeIndex % 2 === 0 ? 'kb-in' : 'kb-out'}`}
+              className={`absolute inset-0 ${cameraClass}`}
               style={{
                 ['--cut-duration' as string]: `${cut?.duration ?? 4}s`,
                 background: `linear-gradient(158deg, ${theme.from} 0%, ${theme.to} 100%)`,

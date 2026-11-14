@@ -186,7 +186,7 @@ export function StylePanel({ studio }: { studio: Studio }) {
           step={0.05}
           onChange={(rate) => patch({ voice: { ...project.voice, rate } })}
           display={`${project.voice.rate.toFixed(2)}x`}
-          hint="쇼츠는 1.05~1.2배가 또렷합니다. 너무 빠르면 자막을 못 따라갑니다."
+          hint="쇼츠는 1.15~1.25배가 힙합니다. 너무 빠르면 자막을 못 따라갑니다."
         />
         <Slider
           label="음 높이"
@@ -255,7 +255,17 @@ export function StylePanel({ studio }: { studio: Studio }) {
         step={1}
         onChange={(ratePct) => patch({ aiVoice: { ...project.aiVoice, ratePct } })}
         display={`${project.aiVoice.ratePct > 0 ? '+' : ''}${project.aiVoice.ratePct}%`}
-        hint="쇼츠는 +5~10%가 또렷합니다. 컷 길이에 맞춰 자동으로 조금 더 당겨 재생합니다."
+        hint="기본 +18% — 2030 쇼츠는 이 정도가 힙합니다. 컷 길이에 맞춰 자동으로 조금 더 당겨 재생합니다."
+      />
+      <Slider
+        label="AI 목소리 음높이"
+        value={project.aiVoice.pitchHz}
+        min={-10}
+        max={20}
+        step={1}
+        onChange={(pitchHz) => patch({ aiVoice: { ...project.aiVoice, pitchHz } })}
+        display={`${project.aiVoice.pitchHz > 0 ? '+' : ''}${project.aiVoice.pitchHz}Hz`}
+        hint="기본 +5Hz — 조금 밝고 활기 있어집니다. 너무 올리면 어린아이처럼 들립니다."
       />
       <div className="mt-2 flex gap-1.5">
         <Btn
