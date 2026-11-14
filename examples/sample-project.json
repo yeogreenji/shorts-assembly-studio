@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "project": { "title": "월급 1.5배 vs 칼퇴" },
+  "project": { "title": "직장인 밸런스 게임 · 월급 1.5배 vs 칼퇴" },
   "canvas": { "width": 1080, "height": 1920, "fps": 30 },
   "style": {
     "subtitle": {
@@ -10,53 +10,65 @@
       "highlight": "#fde047",
       "outline": 3
     },
-    "headline": { "enabled": true, "sizePx": 84 },
-    "voice": { "name": "브라우저 음성", "lang": "ko-KR", "rate": 1.05, "pitch": 1 },
+    "headline": { "enabled": true, "sizePx": 74 },
+    "banner": { "enabled": true, "text": "직장인 밸런스 게임" },
+    "voice": {
+      "name": "",
+      "lang": "ko-KR",
+      "rate": 1.05,
+      "pitch": 1,
+      "tts": {
+        "engine": "edge",
+        "voice": "ko-KR-SunHiNeural",
+        "ratePct": 6,
+        "pitchHz": 0
+      }
+    },
     "bgm": { "mood": "playful", "volume": 0.22 }
   },
   "cuts": [
     {
-      "id": "cut-1",
+      "id": "cut-hook",
       "role": "hook",
-      "headline": "월급 1.5배 vs 칼퇴",
+      "headline": "이거 고르면 회사생활 끝",
       "subtitle": "이거 하나로 *회사생활* 갈립니다",
-      "narration": "이거 하나로 회사생활 갈립니다.",
-      "duration": 3,
+      "narration": "이거 하나로 회사생활 갈립니다",
+      "duration": 3.2,
       "theme": "sunset",
-      "image": null,
+      "image": { "name": "hook.jpg", "dataUrl": "../public/presets/balance-1/hook.jpg" },
       "audio": null
     },
     {
-      "id": "cut-2",
+      "id": "cut-a",
       "role": "body",
       "headline": "A. 월급 1.5배 · 매일 야근",
-      "subtitle": "월급은 *1.5배*. 대신 매일 밤 11시 퇴근입니다",
-      "narration": "월급은 1.5배. 대신 매일 밤 11시 퇴근입니다.",
-      "duration": 5,
+      "subtitle": "월급은 *1.5배*. 대신 매일 밤 11시 퇴근",
+      "narration": "월급은 1.5배. 대신 매일 밤 11시 퇴근입니다",
+      "duration": 5.8,
       "theme": "sunset",
-      "image": null,
+      "image": { "name": "choice-a.jpg", "dataUrl": "../public/presets/balance-1/choice-a.jpg" },
       "audio": null
     },
     {
-      "id": "cut-3",
+      "id": "cut-b",
       "role": "body",
       "headline": "B. 칼퇴 · 월급 동결",
       "subtitle": "6시 정각 *칼퇴*. 월급은 3년째 그대로",
-      "narration": "6시 정각 칼퇴. 월급은 3년째 그대로.",
-      "duration": 5,
+      "narration": "6시 정각 칼퇴. 월급은 3년째 그대로",
+      "duration": 5.4,
       "theme": "sunset",
-      "image": null,
+      "image": { "name": "choice-b.jpg", "dataUrl": "../public/presets/balance-1/choice-b.jpg" },
       "audio": null
     },
     {
-      "id": "cut-4",
+      "id": "cut-cta",
       "role": "cta",
       "headline": "당신의 선택은?",
       "subtitle": "댓글에 *A* 아니면 *B* 남겨주세요",
-      "narration": "댓글에 A 아니면 B 남겨주세요.",
-      "duration": 4,
+      "narration": "댓글에 A 아니면 B 남겨주세요",
+      "duration": 3.6,
       "theme": "sunset",
-      "image": null,
+      "image": { "name": "cta.jpg", "dataUrl": "../public/presets/balance-1/cta.jpg" },
       "audio": null
     }
   ]

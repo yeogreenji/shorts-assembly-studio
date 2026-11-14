@@ -6,6 +6,7 @@ import {
   copyToClipboard,
   downloadBlob,
   downloadText,
+  inlineImageAssets,
   renderOnServer,
   renderThumbnailPng,
   safeFileName,
@@ -13,17 +14,15 @@ import {
 import { Btn, Panel, SectionLabel } from './ui';
 import { ShortsPlayer } from './ShortsPlayer';
 
-const DEFAULT_SERVER = 'http://localhost:8787';
-
 export function PreviewPanel({ studio }: { studio: Studio }) {
-  const { project, notify } = studio;
+  const { project, notify, serverUrl, setServerUrl } = studio;
   const [previewAudio, setPreviewAudio] = useState(true);
-  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER);
   const [rendering, setRendering] = useState(false);
   const [renderLog, setRenderLog] = useState<string | null>(null);
   const [busyThumb, setBusyThumb] = useState(false);
 
   const withAudio = project.cuts.filter((cut) => cut.audio).length;
+  const aiVoiceOn = Boolean(project.aiVoice?.voice);
   const withoutSubtitle = project.cuts.filter((cut) => !cut.subtitle.trim() && !cut.narration.trim()).length;
   const baseName = safeFileName(project.title, 'shorts');
 
@@ -39,8 +38,8 @@ export function PreviewPanel({ studio }: { studio: Studio }) {
     notify('대본 TXT를 내려받았습니다.');
   };
 
-  const handleJson = () => {
-    const payload = buildRenderPayload(project);
+  const handleJson = async () => {
+    const payload = await inlineImageAssets(buildRenderPayload(project));
     downloadText(`${baseName}.json`, JSON.stringify(payload, null, 2), 'application/json');
     notify('렌더용 JSON을 내려받았습니다. scripts/render_shorts.py에 넘기면 MP4가 나옵니다.');
   };
@@ -60,10 +59,11 @@ export function PreviewPanel({ studio }: { studio: Studio }) {
 
   const handleRender = async () => {
     if (rendering) return;
-    const payload = buildRenderPayload(project);
     setRendering(true);
-    setRenderLog('렌더 서버에 요청을 보냈습니다… (첫 렌더는 30초~2분 걸립니다)');
+    setRenderLog('장면 이미지를 정리하고 있습니다…');
     try {
+      const payload = await inlineImageAssets(buildRenderPayload(project));
+      setRenderLog('렌더 서버에 요청을 보냈습니다… (AI 보이스까지 넣으면 30초~2분 걸립니다)');
       const result = await renderOnServer(payload, serverUrl, `${baseName}.mp4`);
       downloadBlob(`${baseName}.mp4`, result.blob);
       setRenderLog(`✅ 완성: ${baseName}.mp4\n${result.log}`);
@@ -77,7 +77,7 @@ export function PreviewPanel({ studio }: { studio: Studio }) {
     }
   };
 
-  const cliCommand = `cd shorts-assembly-studio && python3 scripts/render_shorts.py "${baseName}.json" -o "${baseName}.mp4"`;
+  const cliCommand = `cd shorts-assembly-studio && python3 scripts/render_shorts.py "${baseName}.json" -o "${baseName}.mp4" --voice edge --tts ${project.aiVoice.voice}`;
 
   return (
     <Panel
@@ -94,8 +94,8 @@ export function PreviewPanel({ studio }: { studio: Studio }) {
         <StatusChip tone={withoutSubtitle === 0 ? 'ok' : 'warn'}>
           자막 {project.cuts.length - withoutSubtitle}/{project.cuts.length}
         </StatusChip>
-        <StatusChip tone={withAudio > 0 ? 'ok' : 'warn'}>
-          음성 {withAudio}/{project.cuts.length}
+        <StatusChip tone={withAudio > 0 || aiVoiceOn ? 'ok' : 'warn'}>
+          음성 {withAudio > 0 ? `녹음 ${withAudio}컷` : aiVoiceOn ? `AI ${project.aiVoice.voiceLabel}` : '없음'}
         </StatusChip>
         <StatusChip tone={project.cuts.some((c) => c.image) ? 'ok' : 'info'}>
           이미지 {project.cuts.filter((c) => c.image).length}컷
@@ -104,10 +104,9 @@ export function PreviewPanel({ studio }: { studio: Studio }) {
           BGM {project.bgm.mood === 'none' ? '무음' : `${Math.round(project.bgm.volume * 100)}%`}
         </StatusChip>
       </div>
-      {withAudio === 0 ? (
+      {withAudio === 0 && !aiVoiceOn ? (
         <p className="mt-1.5 text-[10px] leading-relaxed text-amber-300/70">
-          아직 컷에 녹음·오디오가 없습니다. MP4는 자막과 BGM만으로도 만들어지지만, 목소리는 직접 넣어야
-          들어갑니다.
+          녹음도 AI 보이스도 없습니다. MP4는 자막·BGM만으로 만들어집니다. 2단계에서 AI 보이스를 골라 주세요.
         </p>
       ) : null}
 
@@ -121,7 +120,7 @@ export function PreviewPanel({ studio }: { studio: Studio }) {
         <Btn variant="soft" onClick={handleTxt}>
           📄 대본 TXT
         </Btn>
-        <Btn variant="ghost" onClick={handleJson}>
+        <Btn variant="ghost" onClick={() => void handleJson()}>
           🧩 렌더 JSON
         </Btn>
         <Btn variant="ghost" onClick={() => void handleThumb()} disabled={busyThumb}>
@@ -142,7 +141,7 @@ export function PreviewPanel({ studio }: { studio: Studio }) {
             value={serverUrl}
             onChange={(event) => setServerUrl(event.target.value)}
             className="field flex-1 font-mono text-[11px]"
-            placeholder={DEFAULT_SERVER}
+            placeholder="http://localhost:8787"
             aria-label="렌더 서버 주소"
           />
           <Btn variant="primary" onClick={() => void handleRender()} disabled={rendering}>
@@ -171,8 +170,8 @@ export function PreviewPanel({ studio }: { studio: Studio }) {
       </div>
 
       <p className="mt-3 text-[10px] leading-relaxed text-zinc-600">
-        만든 영상은 1080×1920 · 30fps MP4(H.264)입니다. 인스타 릴스·유튜브 쇼츠에 그대로 올릴 수 있고, SRT는
-        플랫폼 자동 자막 대신 쓸 수 있습니다.
+        만든 영상은 1080×1920 · 30fps MP4(H.264)입니다. 장면 일러스트 · 상단 주제 배너 · 쇼츠식 자막 · 하단
+        진행바 · AI 나레이션 · BGM이 한 번에 들어가고, 인스타 릴스·유튜브 쇼츠에 그대로 올릴 수 있습니다.
       </p>
     </Panel>
   );

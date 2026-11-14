@@ -69,16 +69,51 @@ export function buildRenderPayload(project: Project): RenderPayload {
         outline: project.subtitle.outline,
       },
       headline: { enabled: project.headline.enabled, sizePx: project.headline.sizePx },
+      banner: { enabled: project.banner.enabled, text: project.banner.text },
       voice: {
         name: project.voice.voiceName,
         lang: project.voice.lang,
         rate: project.voice.rate,
         pitch: project.voice.pitch,
+        tts: {
+          engine: project.aiVoice.engine,
+          voice: project.aiVoice.voice,
+          ratePct: project.aiVoice.ratePct,
+          pitchHz: project.aiVoice.pitchHz,
+        },
       },
       bgm: { mood: project.bgm.mood, volume: project.bgm.volume },
     },
     cuts: project.cuts.map((cut) => ({ ...cut })),
   };
+}
+
+/**
+ * /presets/... 같은 public 경로로 들어 있는 장면 이미지를 data URL로 바꿔 둡니다.
+ * 이렇게 하면 내려받은 JSON 하나만으로도 렌더 스크립트가 그림을 찾습니다.
+ */
+export async function inlineImageAssets(payload: RenderPayload): Promise<RenderPayload> {
+  const cuts = await Promise.all(
+    payload.cuts.map(async (cut) => {
+      const source = cut.image?.dataUrl;
+      if (!cut.image || !source || source.startsWith('data:')) return cut;
+      try {
+        const response = await fetch(source);
+        if (!response.ok) return cut;
+        const blob = await response.blob();
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result ?? ''));
+          reader.onerror = () => reject(new Error('이미지를 읽지 못했습니다.'));
+          reader.readAsDataURL(blob);
+        });
+        return { ...cut, image: { name: cut.image.name, dataUrl } };
+      } catch {
+        return cut;
+      }
+    }),
+  );
+  return { ...payload, cuts };
 }
 
 export interface ExportBundle {
@@ -125,9 +160,52 @@ export async function renderOnServer(
     throw new Error(`렌더 서버가 오류를 돌려줬습니다 (${response.status}). ${detail.slice(0, 300)}`);
   }
 
-  const log = response.headers.get('X-Render-Log') ?? '';
+  const rawLog = response.headers.get('X-Render-Log') ?? '';
+  let log = rawLog;
+  try {
+    // 서버가 한글 로그를 encodeURIComponent로 실어 보냅니다.
+    log = rawLog ? decodeURIComponent(rawLog) : '';
+  } catch {
+    log = rawLog;
+  }
   const blob = await response.blob();
   return { blob, filename, log };
+}
+
+export interface VoiceSampleRequest {
+  text: string;
+  voice: string;
+  ratePct?: number;
+  pitchHz?: number;
+}
+
+/** 렌더 서버의 /tts 로 문장 하나를 AI 목소리(mp3)로 받아 미리듣습니다. */
+export async function requestVoiceSample(
+  serverUrl: string,
+  request: VoiceSampleRequest,
+): Promise<HTMLAudioElement> {
+  const base = serverUrl.replace(/\/+$/, '');
+  let response: Response;
+  try {
+    response = await fetch(`${base}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  } catch {
+    throw new Error(
+      `렌더 서버(${base})에 연결하지 못했습니다. 터미널에서 "npm run render-server"를 켜 두면 AI 보이스를 미리들을 수 있습니다.`,
+    );
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`AI 보이스를 만들지 못했습니다. ${detail.slice(0, 240)}`);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
+  return audio;
 }
 
 export function copyToClipboard(text: string): Promise<void> {

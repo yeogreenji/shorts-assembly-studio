@@ -1,4 +1,5 @@
 import type { Project } from '../types';
+import { DEFAULT_AI_VOICE } from './presets';
 
 const KEY = 'shortcut-studio:project:v1';
 
@@ -17,7 +18,12 @@ export function loadStoredProject(): Project | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Project;
     if (!parsed || !Array.isArray(parsed.cuts) || parsed.cuts.length === 0) return null;
-    return parsed;
+    // 예전에 저장한 프로젝트에는 없던 필드를 채워 둡니다.
+    return {
+      ...parsed,
+      banner: parsed.banner ?? { enabled: true, text: '직장인 밸런스 게임' },
+      aiVoice: { ...DEFAULT_AI_VOICE, ...(parsed.aiVoice ?? {}) },
+    };
   } catch {
     return null;
   }

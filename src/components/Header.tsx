@@ -28,8 +28,10 @@ export function Header({
         ...base,
         ...incoming,
         voice: { ...base.voice, ...(incoming.voice ?? {}) },
+        aiVoice: { ...base.aiVoice, ...(incoming.aiVoice ?? {}) },
         subtitle: { ...base.subtitle, ...(incoming.subtitle ?? {}) },
         headline: { ...base.headline, ...(incoming.headline ?? {}) },
+        banner: { ...base.banner, ...(incoming.banner ?? {}) },
         bgm: { ...base.bgm, ...(incoming.bgm ?? {}) },
       });
       notify('프로젝트를 불러왔습니다.');

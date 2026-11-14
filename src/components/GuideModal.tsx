@@ -11,7 +11,7 @@ const STEPS = [
   },
   {
     title: '③ 목소리·자막·BGM 맞추기',
-    body: '가운데에서 목소리를 골라 대본 전체를 미리 들어 봅니다. 자막 위치·크기·강조색, BGM 분위기와 볼륨을 조절하세요.',
+    body: '가운데에서 MP4에 들어갈 AI 보이스(선희·인준·현수)를 고르고 [샘플 AI 보이스 생성]으로 바로 들어 봅니다. 자막 위치·크기·강조색, 상단 주제 배너 문구, BGM 분위기와 볼륨도 여기서 맞춥니다.',
   },
   {
     title: '④ 미리보기로 리듬 확인',
@@ -73,9 +73,9 @@ export function GuideModal({ onClose }: { onClose: () => void }) {
         <div className="mt-4 rounded-xl border border-white/10 bg-black/40 p-3">
           <p className="text-[11px] font-semibold text-zinc-300">MP4를 처음 만든다면</p>
           <pre className="mt-2 overflow-x-auto rounded-lg bg-black/70 p-2 text-[10px] leading-relaxed text-zinc-400">
-{`# 1) FFmpeg 설치 (맥)
+{`# 1) FFmpeg + 한국어 AI 목소리 설치 (맥)
 brew install ffmpeg
-# 윈도우: winget install ffmpeg
+pip install edge-tts        # MP4에 들어갈 AI 나레이션 (인터넷 필요)
 
 # 2) 프로젝트 폴더에서
 npm install
@@ -88,8 +88,8 @@ python3 scripts/render_shorts.py my.json -o out.mp4`}
         </div>
 
         <p className="mt-3 text-[10px] leading-relaxed text-zinc-600">
-          브라우저 목소리는 미리듣기용입니다. MP4에 목소리를 넣으려면 컷 카드의 🎙 녹음이나 ♪ 오디오 파일을
-          써주세요. 넣지 않으면 자막·BGM만 있는 영상이 만들어집니다.
+          MP4에는 ②단계에서 고른 AI 보이스가 자동으로 들어갑니다. 컷 카드에 🎙 녹음이나 ♪ 오디오 파일이 있으면
+          그 컷은 녹음이 우선합니다. 배너·자막·하단 진행바도 미리보기 그대로 구워집니다.
         </p>
       </div>
     </div>

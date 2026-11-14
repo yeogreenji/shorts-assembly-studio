@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Cut, Project } from '../types';
-import { draftToProject, type DraftTemplate } from '../lib/presets';
+import { TEMPLATES, draftToProject, type DraftTemplate } from '../lib/presets';
 import { loadStoredProject, saveStoredProject } from '../lib/storage';
 
 let cutSeq = 0;
@@ -27,15 +27,37 @@ export interface Toast {
   tone: 'info' | 'warn' | 'error';
 }
 
+const SERVER_KEY = 'shortcut-studio:server-url';
+export const DEFAULT_SERVER_URL = 'http://localhost:8787';
+
+function loadServerUrl(): string {
+  try {
+    return localStorage.getItem(SERVER_KEY) ?? DEFAULT_SERVER_URL;
+  } catch {
+    return DEFAULT_SERVER_URL;
+  }
+}
+
 export function useStudio() {
   const [project, setProject] = useState<Project>(() => {
     const stored = loadStoredProject();
     if (stored) return stored;
-    return draftToProject(null, '월급 1.5배 매일 야근 vs 칼퇴 월급 동결');
+    // 기본값은 장면 일러스트 4컷이 붙은 밸런스 게임 프리셋으로 시작합니다.
+    return draftToProject(TEMPLATES[0] ?? null, '월급 1.5배 매일 야근 vs 칼퇴 월급 동결');
   });
+  const [serverUrl, setServerUrlState] = useState<string>(() => loadServerUrl());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'stripped' | 'failed'>('saved');
   const toastSeq = useRef(0);
+
+  const setServerUrl = useCallback((next: string) => {
+    setServerUrlState(next);
+    try {
+      localStorage.setItem(SERVER_KEY, next);
+    } catch {
+      /* 저장 실패는 무시 */
+    }
+  }, []);
 
   const notify = useCallback((message: string, tone: Toast['tone'] = 'info') => {
     toastSeq.current += 1;
@@ -131,6 +153,7 @@ export function useStudio() {
           ...next,
           id: prev.id,
           voice: prev.voice,
+          aiVoice: prev.aiVoice,
           subtitle: prev.subtitle,
           headline: prev.headline,
         };
@@ -152,6 +175,8 @@ export function useStudio() {
   return {
     project,
     setProject,
+    serverUrl,
+    setServerUrl,
     patch,
     updateCut,
     addCut,

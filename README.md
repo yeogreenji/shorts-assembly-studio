@@ -5,6 +5,9 @@
 주제 한 줄만 넣으면 훅 → A/B 본문 → 투표 컷까지 대본 초안이 나오고, 오른쪽 미리보기에서 실제 재생되는 화면을 보며
 컷·자막·목소리·BGM을 맞춘 뒤, **SRT 자막 / 대본 TXT / 렌더 JSON / 썸네일 PNG / MP4**로 바로 내보냅니다.
 
+MP4에는 **장면 일러스트 · 상단 주제 배너 · 쇼츠식 굵은 자막 · 하단 진행바 · 한국어 AI 나레이션 · BGM**이
+한 번에 들어갑니다. 나레이션은 `edge-tts`의 한국어 신경망 음성(`ko-KR-SunHiNeural` 등)을 씁니다.
+
 ![스튜디오 화면](docs/screenshots/01-studio.png)
 
 ---
@@ -14,8 +17,8 @@
 | 패널 | 하는 일 |
 | --- | --- |
 | **① 대본 · 소스 입력** | 밸런스 게임 주제 입력 → **자동 대본 초안**(훅 3초 + 본문 2컷 + 투표 1컷). 컷별 헤드라인·자막·나레이션·길이 편집, 배경 그라디언트 5종 또는 이미지 업로드, 🎙 마이크로 그 컷 나레이션 직접 녹음 |
-| **② 음성 · 스타일 설정** | 브라우저 TTS 목소리 선택, 말 속도·음 높이, **대본 전체 듣기**, 자막 위치(상/중/하)·크기·외곽선·글자색·강조색, 헤드라인 크기, BGM 분위기 4종·볼륨, BGM 미리듣기 |
-| **③ 9:16 미리보기 · 내보내기** | 컷이 실제로 넘어가며 자막이 뜨는 **플레이어**(재생/일시정지·컷 이동·진행 바 스크럽), SRT/TXT/JSON/썸네일 내보내기, **로컬 렌더 서버로 MP4 조립** |
+| **② 음성 · 스타일 설정** | 브라우저 TTS 목소리 선택(미리듣기), **AI 보이스**(선희·인준·현수) 선택 + 속도 보정 + **샘플 AI 보이스 생성**, 자막 위치(상/중/하)·크기·외곽선·글자색·강조색, 헤드라인 크기, **상단 주제 배너** 문구, BGM 분위기 4종·볼륨, BGM 미리듣기 |
+| **③ 9:16 미리보기 · 내보내기** | 컷이 실제로 넘어가며 배너·자막·진행바가 뜨는 **플레이어**(재생/일시정지·컷 이동·진행 바 스크럽), SRT/TXT/JSON/썸네일 내보내기, **로컬 렌더 서버로 MP4 조립** |
 
 - **자막 강조**: 자막에서 `*단어*`처럼 별표로 감싸면 그 단어만 강조색으로 뜹니다. 미리보기·SRT·MP4가 모두 같은 규칙을 씁니다.
 - **자동 저장**: 작업 내용은 브라우저 `localStorage`에 자동 저장됩니다. 이미지·녹음이 커서 용량을 넘기면 텍스트만 저장하고 상태 표시줄에 알려 줍니다.
@@ -37,6 +40,7 @@
 | **FFmpeg** | MP4 조립 (브라우저 미리보기만 볼 거라면 없어도 됨) | 맥 `brew install ffmpeg` · 윈도우 `winget install ffmpeg` |
 | **한글 폰트** | 영상에 한글 자막을 굽기 위해 | 맥·윈도우 기본 폰트를 자동으로 찾습니다. 없으면 `--font`로 지정 |
 | Python 3.9+ | 렌더 스크립트 실행 (표준 라이브러리만 사용, 추가 설치 없음) | 맥 기본 포함 · 윈도우 https://python.org |
+| **edge-tts** (선택) | MP4에 들어갈 **한국어 AI 나레이션** | `pip install edge-tts` (인터넷 필요). 없으면 자막·BGM만 들어갑니다 |
 
 ### 실행
 
@@ -95,7 +99,13 @@ python3 scripts/render_shorts.py <프로젝트.json> [옵션]
 | `--ffmpeg` | PATH 자동 탐색 | FFmpeg 실행 파일 경로 (`FFMPEG` 환경변수도 인식) |
 | `--font` | 자동 탐색 | 한글 폰트 파일 경로 (예: `/System/Library/Fonts/AppleSDGothicNeo.ttc`) |
 | `--font-family` | 자동 감지 | ASS 자막에 쓸 폰트 패밀리 이름 (자동 감지가 틀릴 때) |
-| `--voice` | `auto` | 녹음이 없는 컷의 음성 처리: `auto`(espeak-ng 있으면 합성) · `espeak` · `none` |
+| `--voice` | `auto` | 녹음이 없는 컷의 음성 처리: `auto`(**edge-tts → espeak-ng → 무음**) · `edge` · `espeak` · `none` |
+| `--tts` | `ko-KR-SunHiNeural` | edge-tts 한국어 음성 (`ko-KR-InJoonNeural`, `ko-KR-HyunsuMultilingualNeural`) |
+| `--tts-rate` | 프로젝트 설정 | AI 목소리 속도 보정 `%` (예: `--tts-rate 8`) |
+| `--list-tts` | | 쓸 수 있는 한국어 AI 목소리와 edge-tts 설치 여부를 보여줍니다 |
+| `--banner "문구"` | 프로젝트 설정 | 상단 주제 배너 문구 바꾸기 (`--no-banner`로 끔) |
+| `--no-progress` | 꺼짐 | 하단 진행바를 넣지 않음 |
+| `--no-sfx` | 꺼짐 | 컷 전환 효과음(휙+틱)을 넣지 않음 |
 | `--fit-audio` | 꺼짐 | 녹음이 컷 길이보다 길면 컷 길이를 늘려 잘리지 않게 함 |
 | `--no-bgm` | 꺼짐 | BGM 없이 렌더 |
 | `--crf` | `20` | 화질 (낮을수록 고화질·대용량) |
@@ -104,6 +114,12 @@ python3 scripts/render_shorts.py <프로젝트.json> [옵션]
 | `--keep-temp` | | 중간 파일 보존 (문제 확인용) |
 
 렌더가 끝나면 **MP4 옆에 같은 이름의 `.srt`** 도 함께 저장됩니다.
+
+```bash
+# AI 보이스까지 넣어 한 번에 뽑기
+pip install edge-tts
+python3 scripts/render_shorts.py examples/sample-project.json -o my_shorts.mp4
+```
 
 같은 프로젝트를 MP4로 조립한 결과 — 자막은 libass로, 배경은 코드로 만든 그라디언트입니다.
 
@@ -116,19 +132,23 @@ python3 scripts/render_shorts.py <프로젝트.json> [옵션]
 ```
 project.json
    │
+   ├─(0) AI 목소리: 컷마다 edge-tts로 나레이션 합성 → 목소리가 길면 그 컷 길이를 자동으로 늘림
    ├─(1) 컷마다 1080×1920 영상 조각
-   │      · 배경 이미지: cover 크롭 + zoompan(켄번즈) — 컷마다 확대/축소 방향이 번갈아 바뀜
+   │      · 배경 이미지: 1.3배로 키운 뒤 cover 크롭 + zoompan(켄번즈) — 컷마다 확대/축소·팬 방향이 바뀜
    │      · 이미지가 없으면 테마 그라디언트 PNG를 코드로 생성해 같은 방식으로 애니메이션
    ├─(2) 컷 조각 concat (무손실 복사)
-   ├─(3) 오디오: 컷별 [녹음 파일 | espeak-ng TTS | 무음] → 이어붙임 → BGM과 amix
-   │      · BGM은 파이썬이 WAV를 직접 합성 (저작권·라이선스 걱정 없음)
-   └─(4) 최종: 상·하단 스크림 오버레이 + ASS 자막 합성(libass) + loudnorm → H.264/AAC MP4
+   ├─(3) 오디오: 컷별 [녹음 파일 | AI 목소리 | 무음] → 이어붙임 → BGM·전환 효과음과 amix
+   │      · BGM·효과음은 파이썬이 WAV를 직접 합성 (저작권·라이선스 걱정 없음)
+   └─(4) 최종: 스크림 + 상단 배너 띠 → ASS 자막(libass) → 하단 진행바(geq로 시간에 따라 채움)
+            → loudnorm(−14 LUFS) → H.264/AAC MP4
 ```
 
-- **자막**은 브라우저 미리보기와 같은 데이터로 `ASS`를 만들어 굽습니다(위치·크기·색·외곽선·강조 단어 포함).
-- **화면 비율·길이**는 프로젝트의 컷 길이 합계 그대로입니다. (미리보기 시간 표시와 일치)
-- **목소리**는 브라우저 TTS를 MP4로 직접 넘길 수 없습니다(브라우저 보안). 그래서 컷 카드에서 **🎙 녹음**하거나
-  **♪ 오디오 파일**(mp3/wav/m4a/webm)을 넣으면 그 소리가 그대로 들어갑니다. 아무것도 없으면 자막·BGM만 있는 영상이 나옵니다.
+- **자막**은 브라우저 미리보기와 같은 데이터로 `ASS`를 만들어 굽습니다(위치·크기·색·외곽선·강조 단어 팝 포함).
+- **배너·진행바**도 미리보기와 같은 비율로 들어갑니다. 진행바는 `drawbox`의 시간식이 ffmpeg 버전에 따라
+  동작하지 않아, `geq`로 시간에 반응하는 띠를 만들어 오버레이합니다(모든 빌드에서 동일하게 동작).
+- **목소리**: ① 컷에 녹음/오디오가 있으면 그것이 우선 ② 없으면 AI 보이스(edge-tts) ③ 그것도 없으면 무음.
+  나레이션이 컷보다 길면 컷 길이를 늘리고, 그래도 넘치면 최대 1.18배까지 당겨 재생합니다(잘림 방지).
+- **화면 비율·길이**는 컷 길이 합계 그대로입니다(목소리에 맞춰 늘어난 길이 포함).
 
 ---
 
@@ -145,7 +165,11 @@ project.json
   "style": {
     "subtitle": { "position": "bottom", "sizePx": 66, "color": "#ffffff", "highlight": "#fde047", "outline": 3 },
     "headline": { "enabled": true, "sizePx": 84 },
-    "voice": { "name": "브라우저 음성", "lang": "ko-KR", "rate": 1.05, "pitch": 1 },
+    "banner": { "enabled": true, "text": "직장인 밸런스 게임" },
+    "voice": {
+      "name": "브라우저 음성", "lang": "ko-KR", "rate": 1.05, "pitch": 1,
+      "tts": { "engine": "edge", "voice": "ko-KR-SunHiNeural", "ratePct": 6, "pitchHz": 0 }
+    },
     "bgm": { "mood": "playful", "volume": 0.22 }
   },
   "cuts": [
@@ -158,6 +182,7 @@ project.json
       "duration": 3,
       "theme": "sunset",                 // sunset | night | mint | candy | mono
       "image": null,                     // { "name": "...", "dataUrl": "data:image/png;base64,..." }
+                                          // data URL 대신 파일 경로도 됩니다 (/presets/..., ../public/... 등)
       "audio": null                      // { "name": "...", "dataUrl": "data:audio/webm;base64,..." }
     }
   ]
@@ -173,7 +198,9 @@ project.json
 | `FFmpeg를 찾지 못했습니다` | `brew install ffmpeg` / `winget install ffmpeg` 후 터미널 재실행, 또는 `--ffmpeg /경로/ffmpeg` |
 | 자막이 네모(□)로 나옴 | 한글 폰트를 못 찾은 경우. `--font`로 폰트 파일 지정 (예: 맥 `AppleSDGothicNeo.ttc`, 윈도우 `malgun.ttf`) |
 | `MP4 만들기`가 연결 실패 | `npm run render-server`가 켜져 있는지, 주소(`http://localhost:8787`)가 맞는지 확인 |
-| 목소리가 안 들어감 | 브라우저 TTS는 MP4에 들어가지 않습니다. 🎙 녹음 또는 ♪ 오디오 파일을 넣거나 `espeak-ng` 설치 후 `--voice espeak` |
+| 목소리가 안 들어감 | `pip install edge-tts` 후 다시 렌더. `--list-tts`로 설치 여부 확인. (브라우저 미리듣기 음성은 MP4와 별개) |
+| AI 보이스가 만들어지지 않음 | edge-tts는 인터넷이 필요합니다. 사내망·오프라인이면 `--voice espeak`로 대체 |
+| 샘플 AI 보이스 버튼이 실패 | `npm run render-server`가 켜져 있어야 합니다(이 서버가 `/tts`로 목소리를 만들어 줍니다) |
 | 목소리 미리듣기가 안 됨 | 브라우저에 음성 엔진이 없는 경우(특히 일부 리눅스·헤드리스). 크롬/엣지/사파리나 휴대폰 브라우저에서 열기 |
 | 녹음이 안 됨 | 마이크 권한 필요. `localhost` 또는 HTTPS에서만 동작합니다 |
 | 녹음이 컷보다 길어 잘림 | 컷 길이를 늘리거나 `--fit-audio` 사용 |
@@ -198,6 +225,7 @@ shorts-assembly-studio/
 │  └─ lib/                     # presets(대본 템플릿) · srt · tts · bgm(WebAudio) · media(내보내기) · recorder
 ├─ scripts/render_shorts.py    # FFmpeg 조립 스크립트 (표준 라이브러리만)
 ├─ server/render-server.mjs    # 로컬 렌더 서버 (의존성 없음, Node 18+)
+├─ public/presets/balance-1/   # 기본 프리셋 장면 일러스트 4장 (1080×1920)
 ├─ examples/sample-project.json
 └─ docs/screenshots/
 ```

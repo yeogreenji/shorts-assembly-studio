@@ -1,4 +1,4 @@
-import type { BgmMood, Cut, CutRole, Project, Theme, ThemeId } from '../types';
+import type { AiVoiceStyle, BgmMood, Cut, CutRole, Project, Theme, ThemeId } from '../types';
 
 export const THEMES: Theme[] = [
   { id: 'sunset', name: '선셋', from: '#ff6b6b', to: '#7c3aed', accent: '#fde047', text: '#ffffff' },
@@ -31,6 +31,10 @@ export interface DraftTemplate {
   topic: string;
   theme: ThemeId;
   bgm: BgmMood;
+  /** 영상 상단에 고정으로 박히는 주제 배너 */
+  banner: string;
+  /** 훅 · A · B · 투표 컷에 쓸 장면 이미지 (public 기준 경로). 없으면 테마 그라디언트로 그립니다. */
+  scenes?: [string, string, string, string];
   thumbnails: string[];
   hooks: string[];
   a: { label: string; lines: string[] };
@@ -50,6 +54,13 @@ export const TEMPLATES: DraftTemplate[] = [
     topic: '월급 1.5배 매일 야근 vs 칼퇴 월급 동결',
     theme: 'sunset',
     bgm: 'playful',
+    banner: '직장인 밸런스 게임',
+    scenes: [
+      '/presets/balance-1/hook.jpg',
+      '/presets/balance-1/choice-a.jpg',
+      '/presets/balance-1/choice-b.jpg',
+      '/presets/balance-1/cta.jpg',
+    ],
     thumbnails: ['월급 1.5배 vs 칼퇴', '이거 고르면 회사생활 끝', '당신의 선택은?'],
     hooks: [
       '이거 하나로 *회사생활* 갈립니다',
@@ -79,6 +90,7 @@ export const TEMPLATES: DraftTemplate[] = [
     topic: '회식 3차까지 vs 2차에서 귀가',
     theme: 'night',
     bgm: 'upbeat',
+    banner: '직장인 밸런스 게임',
     thumbnails: ['회식 3차 vs 2차 귀가', '이 선택이 야근을 부른다', '직장인 필수 시험'],
     hooks: [
       '*회식* 하나로 평판이 갈립니다',
@@ -106,6 +118,7 @@ export const TEMPLATES: DraftTemplate[] = [
     topic: '평생 재택근무 vs 출근 4일 + 연봉 20% 인상',
     theme: 'mint',
     bgm: 'calm',
+    banner: '직장인 밸런스 게임',
     thumbnails: ['평생 재택 vs 연봉 20%', '이건 진짜 어렵다', '출근 vs 재택'],
     hooks: [
       '재택이 *좋은 줄* 알았는데',
@@ -129,6 +142,7 @@ export const TEMPLATES: DraftTemplate[] = [
     topic: '점심시간 2시간 vs 칼퇴 30분 당기기',
     theme: 'candy',
     bgm: 'playful',
+    banner: '직장인 밸런스 게임',
     thumbnails: ['점심 2시간 vs 칼퇴 30분', '점심시간의 진실', '이거 고르면 하루가 달라짐'],
     hooks: [
       '점심시간 *2시간*이면 뭐 하시겠어요?',
@@ -189,6 +203,27 @@ function makeCut(partial: Partial<Cut> & { role: CutRole }): Cut {
   };
 }
 
+/** MP4에 들어가는 AI 목소리 후보 (edge-tts 한국어 신경망 음성) */
+export const AI_VOICES: { id: string; label: string; hint: string }[] = [
+  { id: 'ko-KR-SunHiNeural', label: '선희 · 여성', hint: '차분하고 또렷한 쇼츠 나레이션' },
+  { id: 'ko-KR-InJoonNeural', label: '인준 · 남성', hint: '낮고 안정적인 정보형 톤' },
+  { id: 'ko-KR-HyunsuMultilingualNeural', label: '현수 · 남성', hint: '밝고 발랄한 예능형 톤' },
+];
+
+export const DEFAULT_AI_VOICE: AiVoiceStyle = {
+  engine: 'edge',
+  voice: 'ko-KR-SunHiNeural',
+  voiceLabel: '선희 · 여성',
+  ratePct: 6,
+  pitchHz: 0,
+};
+
+function sceneAsset(path: string | undefined) {
+  if (!path) return null;
+  const name = path.split('/').pop() ?? 'scene.jpg';
+  return { name, dataUrl: path };
+}
+
 /** 밸런스 게임 한 편(훅 3초 + A/B 2컷 + 투표 1컷)을 만들어 냅니다. */
 export function buildDraft(template: DraftTemplate): Cut[] {
   const hook = pick(template.hooks);
@@ -196,6 +231,7 @@ export function buildDraft(template: DraftTemplate): Cut[] {
   const bLine = pick(template.b.lines);
   const cta = pick(template.cta);
   const thumb = pick(template.thumbnails);
+  const scenes = template.scenes ?? [];
 
   return [
     makeCut({
@@ -205,6 +241,7 @@ export function buildDraft(template: DraftTemplate): Cut[] {
       narration: stripMarks(hook),
       duration: 3,
       theme: template.theme,
+      image: sceneAsset(scenes[0]),
     }),
     makeCut({
       role: 'body',
@@ -213,6 +250,7 @@ export function buildDraft(template: DraftTemplate): Cut[] {
       narration: stripMarks(aLine),
       duration: 5,
       theme: template.theme,
+      image: sceneAsset(scenes[1]),
     }),
     makeCut({
       role: 'body',
@@ -221,6 +259,7 @@ export function buildDraft(template: DraftTemplate): Cut[] {
       narration: stripMarks(bLine),
       duration: 5,
       theme: template.theme,
+      image: sceneAsset(scenes[2]),
     }),
     makeCut({
       role: 'cta',
@@ -229,6 +268,7 @@ export function buildDraft(template: DraftTemplate): Cut[] {
       narration: stripMarks(cta),
       duration: 4,
       theme: template.theme,
+      image: sceneAsset(scenes[3]),
     }),
   ];
 }
@@ -287,8 +327,10 @@ export function draftToProject(template: DraftTemplate | null, topic: string): P
     topic: template?.topic ?? topic,
     cuts,
     subtitle: { position: 'bottom', sizePx: 66, color: '#ffffff', highlight: '#fde047', outline: 3 },
-    headline: { enabled: true, sizePx: 84 },
+    headline: { enabled: true, sizePx: 78 },
+    banner: { enabled: true, text: template?.banner ?? '직장인 밸런스 게임' },
     voice: { voiceURI: '', voiceName: '', lang: 'ko-KR', rate: 1.05, pitch: 1, volume: 1 },
+    aiVoice: DEFAULT_AI_VOICE,
     bgm: { mood: bgm, volume: 0.22 },
     updatedAt: Date.now(),
   };

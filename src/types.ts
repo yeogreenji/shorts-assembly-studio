@@ -54,6 +54,24 @@ export interface VoiceStyle {
   volume: number;
 }
 
+/** 영상(MP4)에 들어가는 AI 목소리 — 브라우저 미리듣기와 별개로 렌더 단계에서 합성합니다. */
+export interface AiVoiceStyle {
+  engine: 'edge';
+  /** edge-tts 음성 id (예: ko-KR-SunHiNeural) */
+  voice: string;
+  voiceLabel: string;
+  /** 속도 보정 % (예: 6 → +6%) */
+  ratePct: number;
+  /** 음높이 보정 Hz */
+  pitchHz: number;
+}
+
+/** 영상 상단에 고정으로 박히는 주제 배너 */
+export interface BannerStyle {
+  enabled: boolean;
+  text: string;
+}
+
 export interface BgmStyle {
   mood: BgmMood;
   volume: number;
@@ -66,7 +84,9 @@ export interface Project {
   cuts: Cut[];
   subtitle: SubtitleStyle;
   headline: HeadlineStyle;
+  banner: BannerStyle;
   voice: VoiceStyle;
+  aiVoice: AiVoiceStyle;
   bgm: BgmStyle;
   updatedAt: number;
 }
@@ -85,7 +105,14 @@ export interface RenderPayload {
       outline: number;
     };
     headline: { enabled: boolean; sizePx: number };
-    voice: { name: string; lang: string; rate: number; pitch: number };
+    banner: { enabled: boolean; text: string };
+    voice: {
+      name: string;
+      lang: string;
+      rate: number;
+      pitch: number;
+      tts: { engine: 'edge'; voice: string; ratePct: number; pitchHz: number };
+    };
     bgm: { mood: BgmMood; volume: number };
   };
   cuts: RenderCut[];

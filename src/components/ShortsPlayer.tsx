@@ -134,7 +134,8 @@ export function ShortsPlayer({
   };
 
   const jumpCut = (direction: -1 | 1) => {
-    const target = direction === -1 ? Math.max(0, activeIndex - 1) : Math.min(project.cuts.length - 1, activeIndex + 1);
+    const target =
+      direction === -1 ? Math.max(0, activeIndex - 1) : Math.min(project.cuts.length - 1, activeIndex + 1);
     seekTo(starts[target] ?? 0);
   };
 
@@ -146,18 +147,17 @@ export function ShortsPlayer({
 
   const theme = cut ? THEME_MAP[cut.theme] : THEME_MAP.sunset;
   const highlightStyle = { color: project.subtitle.highlight };
-  const outline = Math.max(0, project.subtitle.outline) * Math.max(1, scale * 2.2);
-  const shadow = outline
-    ? `${outline}px 0 0 #000, -${outline}px 0 0 #000, 0 ${outline}px 0 #000, 0 -${outline}px 0 #000, 0 0 ${outline * 1.6}px rgba(0,0,0,0.65)`
-    : '0 2px 12px rgba(0,0,0,0.55)';
+  // 쇼츠식 굵은 테두리 — 화면이 밝아도 글자가 살아 있게
+  const stroke = Math.max(1.2, project.subtitle.outline * 0.9 * Math.max(0.5, scale * 3));
+  const shadow = `${stroke * 0.6}px ${stroke * 0.9}px ${stroke * 1.4}px rgba(0,0,0,0.55)`;
 
   const subtitlePosition = project.subtitle.position;
-  const alignment =
+  const subtitleStyle =
     subtitlePosition === 'top'
-      ? 'items-start pt-[22%]'
+      ? { top: `${((154 + 70) / 1920) * 100}%` }
       : subtitlePosition === 'middle'
-        ? 'items-center pt-[6%]'
-        : 'items-end pb-[16%]';
+        ? { top: '42%', transform: 'translateY(-50%)' }
+        : { bottom: `${(0.142 * 1920 * scale).toFixed(1)}px` };
 
   return (
     <div>
@@ -166,7 +166,7 @@ export function ShortsPlayer({
           ref={frameRef}
           onClick={togglePlay}
           className="relative cursor-pointer overflow-hidden rounded-[20px] border border-white/10 bg-black shadow-[0_25px_60px_-25px_rgba(0,0,0,0.95)]"
-          style={{ height: 'clamp(300px, 44vh, 500px)', aspectRatio: '9 / 16' }}
+          style={{ height: 'clamp(300px, 46vh, 520px)', aspectRatio: '9 / 16' }}
         >
           {/* 배경 */}
           {cut?.image ? (
@@ -189,23 +189,47 @@ export function ShortsPlayer({
           )}
 
           {/* 가독성 스크림 */}
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/55 via-transparent to-black/65" />
-          <div
-            className="pointer-events-none absolute inset-0"
-            style={{
-              background: cut?.image
-                ? 'radial-gradient(circle at 50% 42%, transparent 35%, rgba(0,0,0,0.35) 100%)'
-                : 'radial-gradient(circle at 70% 18%, rgba(255,255,255,0.22), transparent 55%)',
-            }}
-          />
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/60" />
+
+          {/* 컷 전환 플래시 */}
+          {cut ? <div key={`flash-${cut.id}`} className="cut-flash pointer-events-none absolute inset-0 bg-white" /> : null}
+
+          {/* 상단 주제 배너 (영상 전체에 고정) */}
+          {project.banner.enabled && project.banner.text.trim() ? (
+            <div
+              className="absolute inset-x-0 top-0 flex items-center justify-center"
+              style={{
+                height: `${(154 / 1920) * 100}%`,
+                background: 'linear-gradient(180deg, rgba(14,14,20,0.92), rgba(10,10,16,0.80))',
+                borderBottom: `${Math.max(2, 8 * scale)}px solid ${project.subtitle.highlight}`,
+              }}
+            >
+              <span
+                className="font-black tracking-tight"
+                style={{
+                  color: project.subtitle.highlight,
+                  fontSize: 58 * scale,
+                  letterSpacing: '0.01em',
+                }}
+              >
+                {project.banner.text}
+              </span>
+            </div>
+          ) : null}
 
           {/* 헤드라인 */}
           {project.headline.enabled && cut ? (
-            <div key={`head-${cut.id}`} className="head-fade absolute inset-x-0 top-[9%] px-[7%]">
+            <div
+              key={`head-${cut.id}`}
+              className="head-fade absolute inset-x-0 px-[6%]"
+              style={{ top: `${((154 + 34) / 1920) * 100}%` }}
+            >
               <p
-                className="text-center font-black leading-[1.15] tracking-tight text-white"
+                className="text-center font-black leading-[1.18] tracking-tight text-white"
                 style={{
                   fontSize: project.headline.sizePx * scale,
+                  WebkitTextStroke: `${Math.max(1, project.headline.sizePx * scale * 0.075)}px #000`,
+                  paintOrder: 'stroke fill',
                   textShadow: shadow,
                 }}
               >
@@ -214,27 +238,17 @@ export function ShortsPlayer({
             </div>
           ) : null}
 
-          {/* 컷 표시 */}
-          <div className="absolute right-2.5 top-2.5 flex items-center gap-1 rounded-full bg-black/50 px-2 py-0.5">
-            <span className="text-[9px] font-bold text-white/80">
-              {activeIndex + 1}/{project.cuts.length}
-            </span>
-          </div>
-          <div className="absolute left-2.5 top-2.5 rounded-full bg-black/50 px-2 py-0.5">
-            <span className="text-[9px] font-bold uppercase tracking-wider text-white/70">
-              {cut?.role === 'hook' ? '훅' : cut?.role === 'cta' ? '투표' : '본문'}
-            </span>
-          </div>
-
           {/* 자막 */}
           {cut ? (
-            <div className={`absolute inset-0 flex justify-center px-[6%] ${alignment}`}>
+            <div className="absolute inset-x-0 flex justify-center px-[5%]" style={subtitleStyle}>
               <p
                 key={`sub-${cut.id}`}
-                className="sub-pop max-w-full rounded-lg bg-black/40 px-3 py-1.5 text-center font-extrabold leading-[1.32] text-white"
+                className="sub-pop max-w-full text-center font-extrabold leading-[1.3]"
                 style={{
                   fontSize: project.subtitle.sizePx * scale,
                   color: project.subtitle.color,
+                  WebkitTextStroke: `${stroke}px #000`,
+                  paintOrder: 'stroke fill',
                   textShadow: shadow,
                 }}
               >
@@ -254,33 +268,40 @@ export function ShortsPlayer({
           {/* 정지 표시 */}
           {!playing ? (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-black/50">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-black/50 backdrop-blur">
                 <span className="ml-0.5 text-xl text-white/90">▶</span>
               </div>
             </div>
           ) : null}
 
-          {/* 진행 바 */}
-          <div className="absolute inset-x-0 bottom-0 px-2.5 pb-2">
-            <div
-              className="group relative h-3 cursor-pointer"
-              onClick={(event) => {
-                event.stopPropagation();
-                handleScrub(event);
-              }}
-            >
-              <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 overflow-hidden rounded-full bg-white/25">
-                <div
-                  className="h-full rounded-full bg-white"
-                  style={{ width: `${total ? (time / total) * 100 : 0}%` }}
-                />
-              </div>
+          {/* 하단 진행바 */}
+          <div
+            className="group absolute inset-x-0 bottom-0 z-20 cursor-pointer px-0 pb-0"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleScrub(event);
+            }}
+          >
+            <div className="relative h-4 w-full">
+              <div
+                className="absolute inset-x-0 bottom-0 bg-black/45"
+                style={{ height: Math.max(4, 10 * scale) }}
+              />
+              <div
+                className="absolute bottom-0 left-0"
+                style={{
+                  height: Math.max(4, 10 * scale),
+                  width: `${total ? (time / total) * 100 : 0}%`,
+                  background: project.subtitle.highlight,
+                  boxShadow: `0 0 ${Math.max(4, 10 * scale)}px ${project.subtitle.highlight}66`,
+                }}
+              />
               {starts.map((start, index) =>
                 index === 0 ? null : (
                   <span
                     key={index}
-                    className="absolute top-1/2 h-2 w-0.5 -translate-y-1/2 bg-white/50"
-                    style={{ left: `${(start / (total || 1)) * 100}%` }}
+                    className="absolute bottom-0 w-[2px] bg-black/60"
+                    style={{ left: `${(start / (total || 1)) * 100}%`, height: Math.max(6, 14 * scale) }}
                   />
                 ),
               )}
@@ -336,7 +357,11 @@ export function ShortsPlayer({
         </button>
       </div>
 
-      <div className="mt-1.5 flex items-center justify-between px-0.5 text-[10px] text-zinc-500">
+      <p className="mt-1.5 text-center text-[10px] text-zinc-500">
+        상단 배너 · 하단 진행바 · 굵은 자막까지 MP4에 똑같이 들어갑니다.
+      </p>
+
+      <div className="mt-1 flex items-center justify-between px-0.5 text-[10px] text-zinc-500">
         <span className="font-mono">
           {formatClock(time)} / {formatClock(total)}
         </span>

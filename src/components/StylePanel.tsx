@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BgmMood, SubtitlePosition } from '../types';
-import { BGM_MOODS } from '../lib/presets';
+import { AI_VOICES, BGM_MOODS } from '../lib/presets';
+import { requestVoiceSample } from '../lib/media';
 import { bgmPlayer } from '../lib/bgm';
 import { isTtsSupported, listVoices, loadVoices, sortVoices, speak, stopSpeaking } from '../lib/tts';
 import type { Studio } from '../hooks/useStudio';
@@ -13,7 +14,10 @@ const POSITIONS: { id: SubtitlePosition; label: string }[] = [
 ];
 
 export function StylePanel({ studio }: { studio: Studio }) {
-  const { project, patch, notify } = studio;
+  const { project, patch, notify, serverUrl } = studio;
+  const [sampleBusy, setSampleBusy] = useState(false);
+  const [sampleState, setSampleState] = useState<'idle' | 'playing' | 'error'>('idle');
+  const sampleRef = useRef<HTMLAudioElement | null>(null);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voicesLoaded, setVoicesLoaded] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
@@ -220,6 +224,94 @@ export function StylePanel({ studio }: { studio: Studio }) {
 
       <div className="my-4 h-px bg-white/5" />
 
+      <SectionLabel
+        right={<span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[9px] text-zinc-400">MP4에 들어감</span>}
+      >
+        AI 보이스 (한국어 나레이션)
+      </SectionLabel>
+      <div className="mb-2 grid grid-cols-3 gap-1.5">
+        {AI_VOICES.map((voice) => (
+          <button
+            key={voice.id}
+            type="button"
+            onClick={() => patch({ aiVoice: { ...project.aiVoice, voice: voice.id, voiceLabel: voice.label } })}
+            className={`rounded-lg border px-1.5 py-1.5 text-left transition ${
+              project.aiVoice.voice === voice.id
+                ? 'border-brand-400/60 bg-brand-500/15'
+                : 'border-white/10 hover:border-white/25'
+            }`}
+            title={voice.hint}
+          >
+            <span className="block text-[11px] font-semibold text-zinc-200">{voice.label}</span>
+            <span className="block text-[9px] leading-tight text-zinc-500">{voice.hint}</span>
+          </button>
+        ))}
+      </div>
+      <Slider
+        label="AI 목소리 속도 보정"
+        value={project.aiVoice.ratePct}
+        min={-10}
+        max={30}
+        step={1}
+        onChange={(ratePct) => patch({ aiVoice: { ...project.aiVoice, ratePct } })}
+        display={`${project.aiVoice.ratePct > 0 ? '+' : ''}${project.aiVoice.ratePct}%`}
+        hint="쇼츠는 +5~10%가 또렷합니다. 컷 길이에 맞춰 자동으로 조금 더 당겨 재생합니다."
+      />
+      <div className="mt-2 flex gap-1.5">
+        <Btn
+          variant="primary"
+          className="flex-1"
+          disabled={sampleBusy}
+          onClick={() => {
+            const cut = project.cuts[0];
+            const text = (cut?.narration || cut?.subtitle.replace(/\*/g, '') || '').trim();
+            if (!text) {
+              notify('첫 컷에 나레이션 문장이 없습니다. 대본을 먼저 채워 주세요.', 'warn');
+              return;
+            }
+            sampleRef.current?.pause();
+            setSampleBusy(true);
+            setSampleState('idle');
+            void requestVoiceSample(serverUrl, {
+              text,
+              voice: project.aiVoice.voice,
+              ratePct: project.aiVoice.ratePct,
+              pitchHz: project.aiVoice.pitchHz,
+            })
+              .then(async (audio) => {
+                sampleRef.current = audio;
+                setSampleState('playing');
+                audio.addEventListener('ended', () => setSampleState('idle'), { once: true });
+                await audio.play();
+              })
+              .catch((error: unknown) => {
+                setSampleState('error');
+                notify(error instanceof Error ? error.message : 'AI 보이스를 만들지 못했습니다.', 'error');
+              })
+              .finally(() => setSampleBusy(false));
+          }}
+        >
+          {sampleBusy ? '⏳ 만드는 중…' : '🔊 샘플 AI 보이스 생성'}
+        </Btn>
+        <Btn
+          variant="ghost"
+          onClick={() => {
+            sampleRef.current?.pause();
+            setSampleState('idle');
+          }}
+          title="미리듣기 정지"
+        >
+          ⏹
+        </Btn>
+      </div>
+      <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600">
+        {sampleState === 'error'
+          ? '렌더 서버(npm run render-server)가 켜져 있어야 들을 수 있습니다.'
+          : '첫 컷 나레이션을 실제 MP4 목소리로 합성해 들려줍니다. 컷에 녹음이 있으면 그 컷은 녹음이 우선합니다.'}
+      </p>
+
+      <div className="my-4 h-px bg-white/5" />
+
       <SectionLabel>자막</SectionLabel>
       <div className="mb-2.5 flex gap-1">
         {POSITIONS.map((position) => (
@@ -289,6 +381,23 @@ export function StylePanel({ studio }: { studio: Studio }) {
             display={`${project.headline.sizePx}px`}
           />
         ) : null}
+        <Toggle
+          checked={project.banner.enabled}
+          onChange={(enabled) => patch({ banner: { ...project.banner, enabled } })}
+          label="상단 주제 배너 (영상 끝까지 고정)"
+        />
+        {project.banner.enabled ? (
+          <input
+            value={project.banner.text}
+            onChange={(event) => patch({ banner: { ...project.banner, text: event.target.value } })}
+            className="field text-[12px]"
+            placeholder="직장인 밸런스 게임"
+            aria-label="상단 배너 문구"
+          />
+        ) : null}
+        <p className="text-[10px] leading-relaxed text-zinc-600">
+          배너는 미리보기와 MP4 상단에 똑같이 박힙니다. 이모지는 영상 폰트에 없어 자동으로 빠집니다.
+        </p>
       </div>
 
       <div className="my-4 h-px bg-white/5" />
@@ -334,10 +443,10 @@ export function StylePanel({ studio }: { studio: Studio }) {
         만들어 넣습니다.
       </p>
 
-      <div className="mt-4 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] p-2.5">
-        <p className="text-[10px] leading-relaxed text-amber-200/80">
-          브라우저 목소리는 미리듣기용입니다. MP4에 목소리를 넣으려면 컷 카드의 <b>🎙 내 목소리 녹음</b>이나{' '}
-          <b>♪ 오디오</b>로 파일을 넣어 주세요. 넣지 않으면 자막·BGM만 있는 영상이 나옵니다.
+      <div className="mt-4 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.06] p-2.5">
+        <p className="text-[10px] leading-relaxed text-emerald-200/80">
+          MP4에는 위에서 고른 <b>AI 보이스</b>가 컷마다 자동으로 들어갑니다(edge-tts). 컷 카드에{' '}
+          <b>🎙 내 목소리 녹음</b>이나 <b>♪ 오디오</b>가 있으면 그 컷은 녹음이 우선합니다.
         </p>
       </div>
     </Panel>

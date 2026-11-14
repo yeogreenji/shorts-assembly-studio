@@ -51,10 +51,18 @@ body {
 }
 
 .panel {
-  background: linear-gradient(180deg, rgba(24, 24, 33, 0.92), rgba(13, 13, 20, 0.92));
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background:
+    linear-gradient(180deg, rgba(28, 28, 39, 0.94), rgba(11, 11, 17, 0.96));
+  border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: 18px;
-  box-shadow: 0 18px 50px -30px rgba(0, 0, 0, 0.9);
+  box-shadow:
+    0 18px 50px -30px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* 스튜디오 느낌의 얇은 강조선 */
+.panel > header {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent);
 }
 
 .field {
@@ -172,6 +180,19 @@ input[type='color']::-webkit-color-swatch {
 }
 .head-fade {
   animation: head-fade 0.35s ease-out both;
+}
+
+@keyframes cut-flash {
+  0% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.cut-flash {
+  opacity: 0;
+  animation: cut-flash 0.22s ease-out both;
 }
 
 @keyframes pulse-dot {
