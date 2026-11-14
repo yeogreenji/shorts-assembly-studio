@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "project": { "title": "월급 1.5배 vs 칼퇴" },
+  "canvas": { "width": 1080, "height": 1920, "fps": 30 },
+  "style": {
+    "subtitle": {
+      "position": "bottom",
+      "sizePx": 66,
+      "color": "#ffffff",
+      "highlight": "#fde047",
+      "outline": 3
+    },
+    "headline": { "enabled": true, "sizePx": 84 },
+    "voice": { "name": "브라우저 음성", "lang": "ko-KR", "rate": 1.05, "pitch": 1 },
+    "bgm": { "mood": "playful", "volume": 0.22 }
+  },
+  "cuts": [
+    {
+      "id": "cut-1",
+      "role": "hook",
+      "headline": "월급 1.5배 vs 칼퇴",
+      "subtitle": "이거 하나로 *회사생활* 갈립니다",
+      "narration": "이거 하나로 회사생활 갈립니다.",
+      "duration": 3,
+      "theme": "sunset",
+      "image": null,
+      "audio": null
+    },
+    {
+      "id": "cut-2",
+      "role": "body",
+      "headline": "A. 월급 1.5배 · 매일 야근",
+      "subtitle": "월급은 *1.5배*. 대신 매일 밤 11시 퇴근입니다",
+      "narration": "월급은 1.5배. 대신 매일 밤 11시 퇴근입니다.",
+      "duration": 5,
+      "theme": "sunset",
+      "image": null,
+      "audio": null
+    },
+    {
+      "id": "cut-3",
+      "role": "body",
+      "headline": "B. 칼퇴 · 월급 동결",
+      "subtitle": "6시 정각 *칼퇴*. 월급은 3년째 그대로",
+      "narration": "6시 정각 칼퇴. 월급은 3년째 그대로.",
+      "duration": 5,
+      "theme": "sunset",
+      "image": null,
+      "audio": null
+    },
+    {
+      "id": "cut-4",
+      "role": "cta",
+      "headline": "당신의 선택은?",
+      "subtitle": "댓글에 *A* 아니면 *B* 남겨주세요",
+      "narration": "댓글에 A 아니면 B 남겨주세요.",
+      "duration": 4,
+      "theme": "sunset",
+      "image": null,
+      "audio": null
+    }
+  ]
+}

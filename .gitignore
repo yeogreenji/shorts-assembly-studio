@@ -1,0 +1,20 @@
+# 의존성
+node_modules/
+
+# 빌드 결과물
+dist/
+dist-ssr/
+
+# 로컬 로그·임시 파일
+*.log
+.DS_Store
+Thumbs.db
+
+# 스튜디오에서 만든 결과물 (필요하면 직접 커밋하세요)
+*.mp4
+*.srt
+renders/
+
+# 환경 변수
+.env
+.env.local
