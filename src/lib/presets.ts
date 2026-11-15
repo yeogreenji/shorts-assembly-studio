@@ -1,5 +1,9 @@
 import type { AiVoiceStyle, BgmMood, Cut, CutCamera, CutRole, Project, Theme, ThemeId } from '../types';
 
+
+/** public/presets 아래 장면 이미지 경로를 배포 base 경로에 맞춰 만듭니다. */
+const presetImage = (path: string) => `${import.meta.env.BASE_URL}${path.replace(/^\//, '')}`;
+
 export const THEMES: Theme[] = [
   { id: 'sunset', name: '선셋', from: '#ff6b6b', to: '#7c3aed', accent: '#fde047', text: '#ffffff' },
   { id: 'night', name: '미드나잇', from: '#0f172a', to: '#334155', accent: '#38bdf8', text: '#ffffff' },
@@ -68,10 +72,10 @@ export const TEMPLATES: DraftTemplate[] = [
     bgm: 'playful',
     banner: '직장인 밸런스 게임',
     scenes: [
-      '/presets/balance-1/hook.jpg',
-      '/presets/balance-1/choice-a.jpg',
-      '/presets/balance-1/choice-b.jpg',
-      '/presets/balance-1/cta.jpg',
+      presetImage('/presets/balance-1/hook.jpg'),
+      presetImage('/presets/balance-1/choice-a.jpg'),
+      presetImage('/presets/balance-1/choice-b.jpg'),
+      presetImage('/presets/balance-1/cta.jpg'),
     ],
     thumbnails: ['월급 1.5배 vs 칼퇴', '이거 고르면 회사생활 끝', '당신의 선택은?'],
     hooks: [
