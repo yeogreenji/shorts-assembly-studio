@@ -1,67 +1,45 @@
-import type { Project } from '../types';
-import { DEFAULT_AI_VOICE } from './presets';
+import type { Shorts, TemplateId } from '../types';
+import { TEMPLATE_MAP, roleOf } from './templates';
+import { clampText } from './text';
 
-const KEY = 'shortcut-studio:project:v1';
+const KEY = 'shortcut-studio:shorts:v2';
 
-function stripMedia(project: Project): Project {
-  return {
-    ...project,
-    cuts: project.cuts.map((cut) => ({ ...cut, image: null, audio: null })),
-  };
+function isShorts(value: unknown): value is Shorts {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<Shorts>;
+  if (!Array.isArray(record.cuts) || record.cuts.length !== 6) return false;
+  if (!TEMPLATE_MAP[record.template as TemplateId]) return false;
+  return record.cuts.every(
+    (cut) => cut && typeof cut.subtitle === 'string' && typeof cut.duration === 'number' && typeof cut.emoji === 'string',
+  );
 }
 
-export type SaveStatus = 'ok' | 'stripped' | 'failed' | 'skipped';
-
-export function loadStoredProject(): Project | null {
+export function loadShorts(): Shorts | null {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Project;
-    if (!parsed || !Array.isArray(parsed.cuts) || parsed.cuts.length === 0) return null;
-    // 예전에 저장한 프로젝트에는 없던 필드를 채워 둡니다.
+    const parsed: unknown = JSON.parse(raw);
+    if (!isShorts(parsed)) return null;
     return {
       ...parsed,
-      banner: parsed.banner ?? { enabled: true, text: '직장인 밸런스 게임' },
-      aiVoice: { ...DEFAULT_AI_VOICE, ...(parsed.aiVoice ?? {}) },
+      cuts: parsed.cuts.map((cut, index) => ({ ...cut, role: roleOf(index), id: cut.id || `cut-${index}` })),
     };
   } catch {
     return null;
   }
 }
 
-export function saveStoredProject(project: Project): SaveStatus {
-  if (typeof localStorage === 'undefined') return 'skipped';
-  const payload = { ...project, updatedAt: Date.now() };
+export function saveShorts(shorts: Shorts): boolean {
   try {
-    localStorage.setItem(KEY, JSON.stringify(payload));
-    return 'ok';
+    localStorage.setItem(KEY, JSON.stringify(shorts));
+    return true;
   } catch {
-    // 이미지·녹음 데이터가 커서 용량을 넘겼다면 텍스트만 저장합니다.
-    try {
-      localStorage.setItem(KEY, JSON.stringify({ ...stripMedia(payload), mediaStripped: true } as Project));
-      return 'stripped';
-    } catch {
-      return 'failed';
-    }
+    return false;
   }
 }
 
-export function clearStoredProject(): void {
-  try {
-    localStorage.removeItem(KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
-export function downloadProjectJson(project: Project): void {
-  const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${project.title || 'project'}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 3000);
+/** 저장 파일 이름에 쓸 안전한 이름. */
+export function fileBase(title: string): string {
+  const cleaned = title.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return clampText(cleaned || 'shorts', 40).replace(/…$/, '');
 }

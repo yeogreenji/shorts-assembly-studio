@@ -1,67 +1,78 @@
-import { useState } from 'react';
-import { useStudio } from './hooks/useStudio';
+import { useShorts } from './hooks/useShorts';
 import { Header } from './components/Header';
-import { ScriptPanel } from './components/ScriptPanel';
-import { StylePanel } from './components/StylePanel';
-import { PreviewPanel } from './components/PreviewPanel';
-import { GuideModal } from './components/GuideModal';
-
-type Tab = 'script' | 'style' | 'preview';
-
-const TABS: { id: Tab; label: string; step: string }[] = [
-  { id: 'script', label: '대본·소스', step: '1' },
-  { id: 'style', label: '음성·스타일', step: '2' },
-  { id: 'preview', label: '미리보기·내보내기', step: '3' },
-];
+import { TopicPanel } from './components/TopicPanel';
+import { ShortsPlayer } from './components/ShortsPlayer';
+import { ShotStrip } from './components/ShotStrip';
+import { ExportBar } from './components/ExportBar';
 
 export default function App() {
-  const studio = useStudio();
-  const [tab, setTab] = useState<Tab>('script');
-  const [guideOpen, setGuideOpen] = useState(false);
+  const studio = useShorts();
+  const { shorts } = studio;
 
   return (
-    <div className="flex h-dvh flex-col gap-2 p-2 sm:p-3">
-      <Header studio={studio} onOpenGuide={() => setGuideOpen(true)} />
+    <div className="min-h-dvh pb-8">
+      <Header saved={studio.saved} />
 
-      <nav className="grid grid-cols-3 gap-1.5 xl:hidden">
-        {TABS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setTab(item.id)}
-            className={`rounded-lg border px-2 py-2 text-[11px] font-semibold transition ${
-              tab === item.id
-                ? 'border-brand-400/60 bg-brand-500/15 text-brand-200'
-                : 'border-white/10 text-zinc-400'
-            }`}
-          >
-            <span className="mr-1 text-[10px] text-zinc-500">{item.step}</span>
-            {item.label}
-          </button>
-        ))}
-      </nav>
+      <main className="mx-auto w-full max-w-6xl px-3 pb-8 pt-3 sm:px-6 sm:pt-5">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,400px)_minmax(0,1fr)] lg:items-start lg:gap-5">
+          <TopicPanel studio={studio} />
 
-      <main className="grid min-h-0 flex-1 gap-2 sm:gap-3 xl:grid-cols-[1.06fr_0.94fr_1fr]">
-        <div className={`min-h-0 min-w-0 ${tab === 'script' ? 'flex' : 'hidden'} xl:flex`}>
-          <ScriptPanel studio={studio} />
+          <section className="panel p-3 sm:p-5" aria-labelledby="preview-heading">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-1">
+              <h2 id="preview-heading" className="text-[14px] font-black text-white">
+                미리보기
+              </h2>
+              <span className="text-[10px] text-zinc-500">
+                9:16 · {shorts.cuts.length}컷 · 약 {studio.totalSeconds.toFixed(1)}초
+              </span>
+            </div>
+
+            <div className="mt-3 grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start sm:justify-center">
+              <div className="flex justify-center">
+                <ShortsPlayer shorts={shorts} playNonce={studio.playNonce} seekRequest={studio.seekRequest} />
+              </div>
+              <div className="mx-auto w-full max-w-[360px] sm:mx-0 sm:max-w-none sm:pt-4">
+                <ExportBar shorts={shorts} notify={studio.notify} vertical />
+                <div className="mt-4 rounded-xl border border-white/[0.07] bg-black/25 p-3">
+                  <p className="text-[10px] font-bold text-zinc-300">이렇게 씁니다</p>
+                  <ol className="mt-1.5 space-y-1 text-[10px] leading-relaxed text-zinc-500">
+                    <li>1. 주제를 한 줄 적고 톤을 고릅니다.</li>
+                    <li>2. 만들기를 누르면 6컷이 바로 재생됩니다.</li>
+                    <li>3. 마음에 안 드는 컷만 아래에서 고칩니다.</li>
+                    <li>4. 대본·자막을 복사해 그대로 촬영합니다.</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
-        <div className={`min-h-0 min-w-0 ${tab === 'style' ? 'flex' : 'hidden'} xl:flex`}>
-          <StylePanel studio={studio} />
+
+        <div className="mt-3 sm:mt-5">
+          <ShotStrip
+            shorts={shorts}
+            onChange={studio.updateCut}
+            onBlur={studio.normalizeCut}
+            onMove={studio.moveCut}
+            onJump={studio.jumpTo}
+          />
         </div>
-        <div className={`min-h-0 min-w-0 ${tab === 'preview' ? 'flex' : 'hidden'} xl:flex`}>
-          <PreviewPanel studio={studio} />
-        </div>
+
+        <p className="mx-auto mt-4 max-w-2xl text-center text-[10px] leading-relaxed text-zinc-600">
+          대본은 AI가 없어도 내장 엔진으로 바로 나옵니다. 만든 대본은 브라우저에 자동 저장되고, 대본·자막(.srt)·컷별
+          가이드로 바로 꺼낼 수 있습니다.
+        </p>
       </main>
 
-      <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex flex-col items-center gap-1.5">
+      <div className="pointer-events-none fixed inset-x-0 bottom-3 z-50 flex flex-col items-center gap-1.5 px-3">
         {studio.toasts.map((toast) => (
           <div
             key={toast.id}
+            role="status"
             className={`pointer-events-auto max-w-[92vw] rounded-xl border px-3 py-2 text-[11px] shadow-2xl backdrop-blur ${
               toast.tone === 'error'
-                ? 'border-red-400/30 bg-red-950/85 text-red-200'
+                ? 'border-red-400/30 bg-red-950/90 text-red-200'
                 : toast.tone === 'warn'
-                  ? 'border-amber-400/30 bg-amber-950/85 text-amber-200'
+                  ? 'border-amber-400/30 bg-amber-950/90 text-amber-200'
                   : 'border-white/15 bg-zinc-900/90 text-zinc-200'
             }`}
           >
@@ -69,8 +80,6 @@ export default function App() {
           </div>
         ))}
       </div>
-
-      {guideOpen ? <GuideModal onClose={() => setGuideOpen(false)} /> : null}
     </div>
   );
 }

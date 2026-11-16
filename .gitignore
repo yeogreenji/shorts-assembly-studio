@@ -22,3 +22,6 @@ renders/
 # 파이썬 캐시
 __pycache__/
 *.pyc
+
+# E2E 임시 빌드
+scripts/.build/

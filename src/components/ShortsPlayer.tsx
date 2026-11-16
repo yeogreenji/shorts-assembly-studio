@@ -1,40 +1,47 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Project } from '../types';
-import { THEME_MAP, defaultCamera } from '../lib/presets';
+import type { Shorts } from '../types';
+import { TEMPLATE_MAP, cameraFor, roleLabel } from '../lib/templates';
 import { cutStartTimes, formatClock, totalDuration } from '../lib/srt';
-import { parseHighlight, speak, stopSpeaking } from '../lib/tts';
-import { bgmPlayer } from '../lib/bgm';
+import { parseHighlight, stripMarks } from '../lib/text';
+import { isTtsSupported, speak, stopSpeaking } from '../lib/tts';
 
+/**
+ * 9:16 쇼츠 플레이어.
+ * 재생을 누르면 컷이 실제로 넘어가고, 컷이 바뀔 때마다 한국어 음성으로 자막을 읽습니다.
+ */
 export function ShortsPlayer({
-  project,
-  previewAudio,
-  onToggleAudio,
+  shorts,
+  playNonce,
+  seekRequest,
 }: {
-  project: Project;
-  previewAudio: boolean;
-  onToggleAudio: (next: boolean) => void;
+  shorts: Shorts;
+  playNonce: number;
+  seekRequest: { index: number; nonce: number } | null;
 }) {
-  const total = useMemo(() => totalDuration(project.cuts), [project.cuts]);
-  const starts = useMemo(() => cutStartTimes(project.cuts), [project.cuts]);
+  const template = TEMPLATE_MAP[shorts.template];
+  const total = useMemo(() => totalDuration(shorts.cuts), [shorts.cuts]);
+  const starts = useMemo(() => cutStartTimes(shorts.cuts), [shorts.cuts]);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const frameRef = useRef<HTMLDivElement>(null);
+  const [muted, setMuted] = useState(false);
   const [frameWidth, setFrameWidth] = useState(280);
-  const spokenRef = useRef<number>(-1);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const spokenRef = useRef(-1);
+  const lastNonce = useRef(playNonce);
 
   const activeIndex = useMemo(() => {
-    if (project.cuts.length === 0) return 0;
     let index = 0;
     for (let i = 0; i < starts.length; i += 1) {
       if (time >= (starts[i] ?? 0)) index = i;
     }
-    return index;
-  }, [starts, time, project.cuts.length]);
+    return Math.min(index, Math.max(0, shorts.cuts.length - 1));
+  }, [starts, time, shorts.cuts.length]);
 
-  const cut = project.cuts[activeIndex];
+  const cut = shorts.cuts[activeIndex] ?? shorts.cuts[0];
   const cutStart = starts[activeIndex] ?? 0;
   const cutProgress = cut ? Math.min(1, Math.max(0, (time - cutStart) / cut.duration)) : 0;
   const scale = frameWidth / 1080;
+  const atEnd = time >= total - 0.02;
 
   useEffect(() => {
     const node = frameRef.current;
@@ -69,307 +76,336 @@ export function ShortsPlayer({
     return () => cancelAnimationFrame(raf);
   }, [playing, total]);
 
-  // 컷이 바뀌면 그 컷의 나레이션을 읽어 줍니다 (미리보기 전용)
+  // 컷이 바뀌면 그 컷의 자막을 한국어 음성으로 읽습니다.
   useEffect(() => {
-    if (!playing || !previewAudio || !cut) return;
+    if (!playing || muted || !cut) return;
     if (spokenRef.current === activeIndex) return;
     spokenRef.current = activeIndex;
-    const text = cut.narration.trim() || cut.subtitle.replace(/\*/g, '').trim();
-    if (!text) return;
-    speak({
-      text,
-      voiceURI: project.voice.voiceURI,
-      rate: project.voice.rate,
-      pitch: project.voice.pitch,
-      volume: project.voice.volume,
-    });
+    speak({ text: stripMarks(cut.subtitle) });
+    // 자막을 고쳐도 재생 중에는 다시 읽지 않습니다(다음 컷부터 반영).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex, playing, previewAudio]);
-
-  useEffect(() => {
-    if (!playing || !previewAudio || project.bgm.mood === 'none') {
-      bgmPlayer.stop();
-      return;
-    }
-    bgmPlayer.start(project.bgm.mood, project.bgm.volume);
-    return () => bgmPlayer.stop();
-    // 볼륨만 바뀔 때는 아래 이펙트에서 부드럽게 조절합니다 (재시작 방지)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, previewAudio, project.bgm.mood]);
-
-  useEffect(() => {
-    bgmPlayer.setVolume(project.bgm.volume);
-  }, [project.bgm.volume, playing]);
+  }, [activeIndex, playing, muted]);
 
   useEffect(() => {
     if (!playing) stopSpeaking();
   }, [playing]);
 
-  useEffect(
-    () => () => {
-      stopSpeaking();
-      bgmPlayer.stop();
-    },
-    [],
-  );
+  useEffect(() => () => stopSpeaking(), []);
 
-  const seekTo = useCallback(
-    (seconds: number) => {
-      const clamped = Math.min(total, Math.max(0, seconds));
-      setTime(clamped);
-      spokenRef.current = -1;
-      stopSpeaking();
-    },
-    [total],
-  );
+  // 새 쇼츠가 만들어지면 처음부터 자동 재생 (만들기 버튼 클릭 = 사용자 동작이라 소리도 허용됨)
+  useEffect(() => {
+    if (lastNonce.current === playNonce) return;
+    lastNonce.current = playNonce;
+    spokenRef.current = -1;
+    setTime(0);
+    setPlaying(true);
+  }, [playNonce]);
 
-  const togglePlay = () => {
+  useEffect(() => {
+    if (!seekRequest) return;
+    spokenRef.current = -1;
+    stopSpeaking();
+    setTime(starts[seekRequest.index] ?? 0);
+    setPlaying(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekRequest]);
+
+  const toggle = useCallback(() => {
     if (playing) {
+      spokenRef.current = -1;
       setPlaying(false);
+      stopSpeaking();
       return;
     }
-    if (time >= total - 0.05) setTime(0);
+    if (atEnd) setTime(0);
     spokenRef.current = -1;
     setPlaying(true);
-  };
+  }, [atEnd, playing]);
 
-  const jumpCut = (direction: -1 | 1) => {
-    const target =
-      direction === -1 ? Math.max(0, activeIndex - 1) : Math.min(project.cuts.length - 1, activeIndex + 1);
-    seekTo(starts[target] ?? 0);
-  };
+  const restart = useCallback(() => {
+    spokenRef.current = -1;
+    stopSpeaking();
+    setTime(0);
+    setPlaying(true);
+  }, []);
 
-  const handleScrub = (event: React.MouseEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = (event.clientX - rect.left) / rect.width;
-    seekTo(ratio * total);
-  };
+  const toggleSound = useCallback(() => {
+    setMuted((prev) => {
+      const next = !prev;
+      if (next) {
+        stopSpeaking();
+        spokenRef.current = -1;
+      } else {
+        spokenRef.current = -1;
+      }
+      return next;
+    });
+  }, []);
 
-  const theme = cut ? THEME_MAP[cut.theme] : THEME_MAP.sunset;
-  const camera = cut && cut.camera && cut.camera !== 'auto' ? cut.camera : defaultCamera(activeIndex, project.cuts.length);
-  const cameraClass = `cam-${camera}`;
-  const highlightStyle = { color: project.subtitle.highlight };
-  // 쇼츠식 굵은 테두리 — 화면이 밝아도 글자가 살아 있게
-  const stroke = Math.max(1.2, project.subtitle.outline * 0.9 * Math.max(0.5, scale * 3));
-  const shadow = `${stroke * 0.6}px ${stroke * 0.9}px ${stroke * 1.4}px rgba(0,0,0,0.55)`;
-
-  const subtitlePosition = project.subtitle.position;
-  const subtitleStyle =
-    subtitlePosition === 'top'
-      ? { top: `${((154 + 70) / 1920) * 100}%` }
-      : subtitlePosition === 'middle'
-        ? { top: '42%', transform: 'translateY(-50%)' }
-        : { bottom: `${(0.142 * 1920 * scale).toFixed(1)}px` };
+  const camera = cameraFor(activeIndex);
+  const sceneImage = template.scenes
+    ? activeIndex === 0
+      ? template.scenes.hook
+      : activeIndex === 5
+        ? template.scenes.cta
+        : activeIndex <= 2
+          ? template.scenes.a
+          : template.scenes.b
+    : null;
+  const angles = [150, 132, 168, 142, 158, 126];
+  const background = `linear-gradient(${angles[activeIndex % angles.length]}deg, ${template.palette.from} 0%, ${template.palette.to} 100%)`;
+  const motion = { animationPlayState: playing ? 'running' : ('paused' as const) };
+  const stroke = Math.max(1.3, 5.4 * Math.max(0.6, scale * 3.2));
 
   return (
-    <div>
-      <div className="flex justify-center">
-        <div
-          ref={frameRef}
-          onClick={togglePlay}
-          className="relative cursor-pointer overflow-hidden rounded-[20px] border border-white/10 bg-black shadow-[0_25px_60px_-25px_rgba(0,0,0,0.95)]"
-          style={{ height: 'clamp(300px, 46vh, 520px)', aspectRatio: '9 / 16' }}
-        >
-          {/* 배경 */}
-          {cut?.image ? (
-            <img
-              key={cut.id}
-              src={cut.image.dataUrl}
-              alt=""
-              className={`absolute inset-0 h-full w-full object-cover ${cameraClass}`}
-              style={{ ['--cut-duration' as string]: `${cut.duration}s` }}
-            />
-          ) : (
-            <div
-              key={cut?.id ?? 'empty'}
-              className={`absolute inset-0 ${cameraClass}`}
-              style={{
-                ['--cut-duration' as string]: `${cut?.duration ?? 4}s`,
-                background: `linear-gradient(158deg, ${theme.from} 0%, ${theme.to} 100%)`,
-              }}
-            />
-          )}
-
-          {/* 가독성 스크림 */}
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/60" />
-
-          {/* 컷 전환 플래시 */}
-          {cut ? <div key={`flash-${cut.id}`} className="cut-flash pointer-events-none absolute inset-0 bg-white" /> : null}
-
-          {/* 상단 주제 배너 (영상 전체에 고정) */}
-          {project.banner.enabled && project.banner.text.trim() ? (
-            <div
-              className="absolute inset-x-0 top-0 flex items-center justify-center"
-              style={{
-                height: `${(154 / 1920) * 100}%`,
-                background: 'linear-gradient(180deg, rgba(14,14,20,0.92), rgba(10,10,16,0.80))',
-                borderBottom: `${Math.max(2, 8 * scale)}px solid ${project.subtitle.highlight}`,
-              }}
-            >
-              <span
-                className="font-black tracking-tight"
-                style={{
-                  color: project.subtitle.highlight,
-                  fontSize: 58 * scale,
-                  letterSpacing: '0.01em',
-                }}
-              >
-                {project.banner.text}
-              </span>
-            </div>
-          ) : null}
-
-          {/* 헤드라인 */}
-          {project.headline.enabled && cut ? (
-            <div
-              key={`head-${cut.id}`}
-              className="head-fade absolute inset-x-0 px-[6%]"
-              style={{ top: `${((154 + 34) / 1920) * 100}%` }}
-            >
-              <p
-                className="text-center font-black leading-[1.18] tracking-tight text-white"
-                style={{
-                  fontSize: project.headline.sizePx * scale,
-                  WebkitTextStroke: `${Math.max(1, project.headline.sizePx * scale * 0.075)}px #000`,
-                  paintOrder: 'stroke fill',
-                  textShadow: shadow,
-                }}
-              >
-                {cut.headline}
-              </p>
-            </div>
-          ) : null}
-
-          {/* 자막 */}
-          {cut ? (
-            <div className="absolute inset-x-0 flex justify-center px-[5%]" style={subtitleStyle}>
-              <p
-                key={`sub-${cut.id}`}
-                className="sub-pop max-w-full text-center font-extrabold leading-[1.3]"
-                style={{
-                  fontSize: project.subtitle.sizePx * scale,
-                  color: project.subtitle.color,
-                  WebkitTextStroke: `${stroke}px #000`,
-                  paintOrder: 'stroke fill',
-                  textShadow: shadow,
-                }}
-              >
-                {parseHighlight(cut.subtitle).map((segment, index) =>
-                  segment.highlighted ? (
-                    <span key={index} style={highlightStyle}>
-                      {segment.text}
-                    </span>
-                  ) : (
-                    <span key={index}>{segment.text}</span>
-                  ),
-                )}
-              </p>
-            </div>
-          ) : null}
-
-          {/* 정지 표시 */}
-          {!playing ? (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-black/50 backdrop-blur">
-                <span className="ml-0.5 text-xl text-white/90">▶</span>
-              </div>
-            </div>
-          ) : null}
-
-          {/* 하단 진행바 */}
+    <div className="flex w-full flex-col items-center">
+      <div
+        ref={frameRef}
+        data-testid="shorts-frame"
+        data-active-index={activeIndex}
+        data-playing={playing ? 'true' : 'false'}
+        role="button"
+        tabIndex={0}
+        aria-label={playing ? '쇼츠 미리보기 멈추기' : '쇼츠 미리보기 재생'}
+        onClick={toggle}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggle();
+          }
+        }}
+        className="relative shrink-0 cursor-pointer select-none overflow-hidden rounded-[26px] border border-white/12 bg-black shadow-[0_30px_80px_-30px_rgba(0,0,0,0.95)]"
+        style={{ height: 'min(62vh, 560px)', aspectRatio: '9 / 16' }}
+      >
+        {/* 배경 — 장면 일러스트가 있으면 그림, 없으면 그라데이션 */}
+        {sceneImage ? (
+          <img
+            key={cut?.id}
+            src={sceneImage}
+            alt=""
+            aria-hidden="true"
+            className={`cam-${camera} absolute inset-0 h-full w-full object-cover`}
+            style={{ ['--cut-duration' as string]: `${cut?.duration ?? 3}s`, ...motion }}
+          />
+        ) : (
           <div
-            className="group absolute inset-x-0 bottom-0 z-20 cursor-pointer px-0 pb-0"
-            onClick={(event) => {
-              event.stopPropagation();
-              handleScrub(event);
-            }}
-          >
-            <div className="relative h-4 w-full">
-              <div
-                className="absolute inset-x-0 bottom-0 bg-black/45"
-                style={{ height: Math.max(4, 10 * scale) }}
-              />
-              <div
-                className="absolute bottom-0 left-0"
-                style={{
-                  height: Math.max(4, 10 * scale),
-                  width: `${total ? (time / total) * 100 : 0}%`,
-                  background: project.subtitle.highlight,
-                  boxShadow: `0 0 ${Math.max(4, 10 * scale)}px ${project.subtitle.highlight}66`,
-                }}
-              />
-              {starts.map((start, index) =>
-                index === 0 ? null : (
-                  <span
-                    key={index}
-                    className="absolute bottom-0 w-[2px] bg-black/60"
-                    style={{ left: `${(start / (total || 1)) * 100}%`, height: Math.max(6, 14 * scale) }}
-                  />
-                ),
-              )}
-            </div>
+            key={cut?.id}
+            className={`cam-${camera} absolute inset-0`}
+            style={{ ['--cut-duration' as string]: `${cut?.duration ?? 3}s`, background, ...motion }}
+          />
+        )}
+
+        {/* 색 번짐 — 그라데이션 배경에 입체감을 줍니다 */}
+        <div
+          key={`blob-${cut?.id}`}
+          className="mesh blob-a pointer-events-none absolute inset-0 opacity-70"
+          style={{
+            background: `radial-gradient(closest-side, ${template.palette.accent} 0%, transparent 72%)`,
+            ...motion,
+          }}
+        />
+        <div
+          className="mesh blob-b pointer-events-none absolute inset-0 opacity-45"
+          style={{
+            background: `radial-gradient(closest-side, ${template.palette.from} 0%, transparent 70%)`,
+            ...motion,
+          }}
+        />
+
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/45 via-black/5 to-black/75" />
+        <div className="grain pointer-events-none absolute inset-0 opacity-[0.18]" />
+        {cut ? <div key={`flash-${cut.id}`} className="cut-flash pointer-events-none absolute inset-0 bg-white" /> : null}
+
+        {/* 상단: 컷 진행 막대 + 라벨 */}
+        <div className="absolute inset-x-0 top-0 z-20" style={{ padding: `${Math.max(8, 26 * scale)}px` }}>
+          <div className="flex gap-x-[3px]">
+            {shorts.cuts.map((item, index) => (
+              <div key={item.id} className="h-[4px] flex-1 overflow-hidden rounded-full bg-white/25">
+                <div
+                  className="h-full rounded-full transition-none"
+                  style={{
+                    width: index < activeIndex ? '100%' : index === activeIndex ? `${cutProgress * 100}%` : '0%',
+                    background: template.palette.accent,
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span
+              className="truncate rounded-full bg-black/45 px-2 py-[3px] font-bold text-white/90 backdrop-blur"
+              style={{ fontSize: Math.max(8, 30 * scale) }}
+            >
+              {shorts.banner || template.banner}
+            </span>
+            <span
+              className="rounded-full bg-black/45 px-2 py-[3px] font-mono text-white/70 backdrop-blur"
+              style={{ fontSize: Math.max(8, 28 * scale) }}
+              data-testid="cut-badge"
+            >
+              {activeIndex + 1}/{shorts.cuts.length}
+            </span>
           </div>
         </div>
+
+        {/* 그라데이션 장면의 깊이 — 얕은 링과 작은 빛망울 */}
+        {cut && !sceneImage ? (
+          <div
+            key={`ring-${cut.id}`}
+            className="ring-pulse pointer-events-none absolute left-1/2 rounded-full border"
+            style={{
+              width: 560 * scale,
+              height: 560 * scale,
+              marginLeft: -280 * scale,
+              top: `calc(21% + ${165 * scale - 280 * scale}px)`,
+              borderColor: `${template.palette.accent}30`,
+            }}
+          />
+        ) : null}
+        {cut && !sceneImage
+          ? [0, 1, 2].map((index) => (
+              <span
+                key={`bokeh-${cut.id}-${index}`}
+                className="bokeh pointer-events-none absolute rounded-full"
+                style={{
+                  width: (18 + index * 9) * scale * 3,
+                  height: (18 + index * 9) * scale * 3,
+                  left: `${16 + index * 30}%`,
+                  top: `${58 - index * 8}%`,
+                  background: template.palette.accent,
+                  opacity: 0.16,
+                  filter: 'blur(6px)',
+                  animationDelay: `${index * 1.4}s`,
+                }}
+              />
+            ))
+          : null}
+
+        {/* 컷 이모지 스티커 — 그라데이션 배경일 때만 크게 (일러스트 장면은 그림을 가리지 않게) */}
+        {cut && !sceneImage ? (
+          <div key={`sticker-${cut.id}`} className="sticker-in absolute inset-x-0 z-10 flex justify-center" style={{ top: '21%' }}>
+            <span
+              className="relative flex items-center justify-center"
+              style={{ width: 330 * scale, height: 330 * scale }}
+            >
+              <span
+                className="absolute inset-0 rounded-full"
+                style={{
+                  background: `radial-gradient(closest-side, ${template.palette.accent}66, transparent 72%)`,
+                  filter: `blur(${Math.max(8, 26 * scale)}px)`,
+                }}
+              />
+              <span className="sticker relative" style={{ fontSize: Math.max(38, 208 * scale) }}>
+                {cut.emoji}
+              </span>
+            </span>
+          </div>
+        ) : null}
+
+        {/* 자막 */}
+        {cut ? (
+          <div
+            className="absolute inset-x-0 z-20 flex justify-center px-[7%]"
+            style={{ bottom: `${Math.max(26, 148 * scale)}px` }}
+          >
+            <p
+              key={`sub-${cut.id}`}
+              data-testid="player-subtitle"
+              className="sub-pop text-center font-black"
+              style={{
+                fontSize: Math.max(15, 84 * scale),
+                lineHeight: 1.26,
+                letterSpacing: '-0.01em',
+                color: '#ffffff',
+                WebkitTextStroke: `${stroke}px #000`,
+                paintOrder: 'stroke fill',
+                textShadow: `${stroke * 0.6}px ${stroke * 0.9}px ${stroke * 1.6}px rgba(0,0,0,0.6)`,
+              }}
+            >
+              {parseHighlight(cut.subtitle).map((segment, index) =>
+                segment.highlighted ? (
+                  <span key={index} className="hl-pop inline-block" style={{ color: template.palette.accent }}>
+                    {segment.text}
+                  </span>
+                ) : (
+                  <span key={index}>{segment.text}</span>
+                ),
+              )}
+            </p>
+          </div>
+        ) : null}
+
+        {/* 멈춤 / 다시 보기 */}
+        {!playing ? (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-black/15">
+            <span
+              className="flex items-center justify-center rounded-full bg-black/55 text-white shadow-2xl backdrop-blur"
+              style={{ width: Math.max(44, 132 * scale), height: Math.max(44, 132 * scale), fontSize: Math.max(16, 52 * scale) }}
+            >
+              {atEnd ? '↻' : '▶'}
+            </span>
+            <span className="text-[10px] font-semibold tracking-wide text-white/70">
+              {atEnd ? '다시 보기' : '눌러서 재생'}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {/* 컨트롤 */}
-      <div className="mt-3 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => seekTo(0)}
-          className="rounded-lg border border-white/10 px-2 py-1.5 text-[11px] text-zinc-400 hover:border-white/25 hover:text-white"
-          title="처음으로"
-        >
-          ⏮
-        </button>
-        <button
-          type="button"
-          onClick={() => jumpCut(-1)}
-          className="rounded-lg border border-white/10 px-2 py-1.5 text-[11px] text-zinc-400 hover:border-white/25 hover:text-white"
-          title="이전 컷"
-        >
-          ◀ 컷
-        </button>
-        <button
-          type="button"
-          onClick={togglePlay}
-          className="flex-1 rounded-lg bg-gradient-to-b from-brand-500 to-brand-600 px-3 py-2 text-xs font-bold text-white shadow-lg shadow-brand-600/30 hover:from-brand-400 hover:to-brand-500"
-        >
-          {playing ? '⏸ 일시정지' : '▶ 미리보기 재생'}
-        </button>
-        <button
-          type="button"
-          onClick={() => jumpCut(1)}
-          className="rounded-lg border border-white/10 px-2 py-1.5 text-[11px] text-zinc-400 hover:border-white/25 hover:text-white"
-          title="다음 컷"
-        >
-          컷 ▶
-        </button>
-        <button
-          type="button"
-          onClick={() => onToggleAudio(!previewAudio)}
-          title={previewAudio ? '미리보기 소리 끄기' : '미리보기 소리 켜기'}
-          className={`rounded-lg border px-2 py-1.5 text-[11px] transition ${
-            previewAudio
-              ? 'border-brand-400/50 bg-brand-500/15 text-brand-200'
-              : 'border-white/10 text-zinc-500 hover:border-white/25'
-          }`}
-        >
-          {previewAudio ? '🔊' : '🔇'}
-        </button>
-      </div>
-
-      <p className="mt-1.5 text-center text-[10px] text-zinc-500">
-        상단 배너 · 하단 진행바 · 굵은 자막까지 MP4에 똑같이 들어갑니다.
-      </p>
-
-      <div className="mt-1 flex items-center justify-between px-0.5 text-[10px] text-zinc-500">
-        <span className="font-mono">
-          {formatClock(time)} / {formatClock(total)}
-        </span>
-        <span>
-          {activeIndex + 1}번째 컷 · {Math.round(cutProgress * 100)}%
-        </span>
+      <div className="mt-4 w-full max-w-[360px]">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            data-testid="play-toggle"
+            onClick={toggle}
+            aria-pressed={playing}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gradient-to-b from-brand-400 to-brand-600 px-3 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand-600/25 transition hover:from-brand-400 hover:to-brand-500 active:scale-[0.99]"
+          >
+            {playing ? '⏸ 멈춤' : atEnd ? '↻ 다시 보기' : '▶ 재생'}
+          </button>
+          <button
+            type="button"
+            data-testid="restart"
+            onClick={restart}
+            title="처음부터"
+            aria-label="처음부터"
+            className="rounded-xl border border-white/10 px-3 py-2.5 text-sm text-zinc-300 transition hover:border-white/25 hover:text-white"
+          >
+            ↺
+          </button>
+          <button
+            type="button"
+            data-testid="sound-toggle"
+            onClick={toggleSound}
+            aria-pressed={!muted}
+            title={muted ? '소리 켜기' : '소리 끄기'}
+            aria-label={muted ? '소리 켜기' : '소리 끄기'}
+            className={`rounded-xl border px-3 py-2.5 text-sm transition ${
+              muted
+                ? 'border-white/10 text-zinc-500 hover:border-white/25 hover:text-zinc-300'
+                : 'border-brand-400/50 bg-brand-500/15 text-brand-200'
+            }`}
+          >
+            {muted ? '🔇' : '🔊'}
+          </button>
+        </div>
+        <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-500">
+          <span className="font-mono">
+            {formatClock(time)} / {formatClock(total)}
+          </span>
+          <span data-testid="cut-counter">
+            {activeIndex + 1}/{shorts.cuts.length}컷 · {roleLabel(activeIndex, shorts.cuts.length)}
+          </span>
+        </div>
+        {!isTtsSupported() ? (
+          <p className="mt-2 text-[11px] leading-relaxed text-amber-300/80">
+            이 브라우저는 음성 읽기를 지원하지 않아요. 화면 전환과 자막은 그대로 재생됩니다.
+          </p>
+        ) : (
+          <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
+            재생하면 컷마다 자막을 한국어 음성으로 읽어 줍니다. 브라우저 목소리라 설치할 것이 없습니다.
+          </p>
+        )}
       </div>
     </div>
   );

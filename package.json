@@ -1,16 +1,15 @@
 {
   "name": "shortcut-studio",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
-  "description": "숏컷 스튜디오 — 3초 훅부터 자막·BGM·MP4까지, 쇼츠 한 편을 한 화면에서 조립하는 스튜디오",
+  "description": "주제 한 줄로 6컷 쇼츠 대본을 조립하고, 화면에서 바로 재생·수정·저장하는 9:16 쇼츠 스튜디오",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "render-server": "node server/render-server.mjs",
-    "render": "python3 scripts/render_shorts.py"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json",
+    "test:e2e": "python3 scripts/verify.py"
   },
   "dependencies": {
     "react": "^19.1.1",

@@ -1,27 +1,26 @@
-import type { Cut, Project } from '../types';
-import { stripMarks } from './presets';
+import type { Shorts, Shot } from '../types';
+import { TONE_LABEL, TEMPLATE_MAP, cameraFor, roleLabel } from './templates';
+import { narrationOf, sceneNote } from './localEngine';
+import { stripMarks } from './text';
 
-function pad(n: number, len = 2): string {
-  return String(Math.floor(n)).padStart(len, '0');
+function pad(value: number, size = 2): string {
+  return String(Math.floor(value)).padStart(size, '0');
 }
 
-/** 00:00:03,500 형식 */
-export function formatSrtTime(totalSeconds: number): string {
-  const ms = Math.round(totalSeconds * 1000);
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  const s = Math.floor((ms % 60_000) / 1000);
-  const milli = ms % 1000;
-  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(milli, 3)}`;
+/** 0:03 — 화면에 보여주는 시계 */
+export function formatClock(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const minutes = Math.floor(safe / 60);
+  return `${minutes}:${pad(safe % 60)}`;
 }
 
-/** 0:03 형식 (사람이 읽는 용도) */
-export function formatClock(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  return `${Math.floor(s / 60)}:${pad(s % 60)}`;
+/** 00:00:03,500 — SRT 타임코드 */
+export function formatSrtTime(seconds: number): string {
+  const ms = Math.round(seconds * 1000);
+  return `${pad(ms / 3_600_000)}:${pad((ms % 3_600_000) / 60_000)}:${pad((ms % 60_000) / 1000)},${pad(ms % 1000, 3)}`;
 }
 
-export function cutStartTimes(cuts: Cut[]): number[] {
+export function cutStartTimes(cuts: Shot[]): number[] {
   const starts: number[] = [];
   let acc = 0;
   for (const cut of cuts) {
@@ -31,45 +30,62 @@ export function cutStartTimes(cuts: Cut[]): number[] {
   return starts;
 }
 
-export function totalDuration(cuts: Cut[]): number {
+export function totalDuration(cuts: Shot[]): number {
   return cuts.reduce((sum, cut) => sum + cut.duration, 0);
 }
 
-/** 컷별 자막을 SRT로. 자막이 비어 있으면 나레이션으로 대체합니다. */
-export function buildSrt(project: Project): string {
+export function buildSrt(shorts: Shorts): string {
   let acc = 0;
   const blocks: string[] = [];
-  project.cuts.forEach((cut, index) => {
-    const text = stripMarks(cut.subtitle.trim() || cut.narration.trim());
+  shorts.cuts.forEach((cut, index) => {
+    const text = stripMarks(cut.subtitle);
     const start = acc;
-    const end = acc + cut.duration;
-    acc = end;
+    acc += cut.duration;
     if (!text) return;
-    blocks.push(
-      `${index + 1}\n${formatSrtTime(start)} --> ${formatSrtTime(end)}\n${text}\n`,
-    );
+    blocks.push(`${index + 1}\n${formatSrtTime(start)} --> ${formatSrtTime(acc)}\n${text}\n`);
   });
   return blocks.join('\n');
 }
 
-/** 대본 TXT — 컷별 헤드라인/자막/나레이션과 타임코드 */
-export function buildTranscript(project: Project): string {
-  const lines: string[] = [];
-  lines.push(project.title);
-  if (project.topic) lines.push(`주제: ${project.topic}`);
-  lines.push(`총 길이: ${totalDuration(project.cuts).toFixed(1)}초 · 컷 ${project.cuts.length}개`);
-  lines.push('');
-  let acc = 0;
-  project.cuts.forEach((cut, index) => {
-    const start = acc;
-    acc += cut.duration;
-    lines.push(`#${index + 1} [${start.toFixed(1)}s–${acc.toFixed(1)}s] (${cut.duration.toFixed(1)}초)`);
-    if (cut.headline.trim()) lines.push(`  헤드라인: ${cut.headline.trim()}`);
-    if (cut.subtitle.trim()) lines.push(`  자막: ${stripMarks(cut.subtitle.trim())}`);
-    if (cut.narration.trim()) lines.push(`  나레이션: ${cut.narration.trim()}`);
-    if (cut.image) lines.push(`  배경: 업로드 이미지 (${cut.image.name})`);
-    if (cut.audio) lines.push(`  음성: 업로드 오디오 (${cut.audio.name})`);
+/** 대본 — 그대로 복사해 촬영·편집에 쓸 수 있는 형태. */
+export function buildScript(shorts: Shorts): string {
+  const template = TEMPLATE_MAP[shorts.template];
+  const lines: string[] = [
+    shorts.title,
+    `주제: ${shorts.topic}`,
+    `구성: ${template.label} · ${TONE_LABEL[shorts.tone]} 톤 · ${shorts.cuts.length}컷 · ${totalDuration(shorts.cuts).toFixed(1)}초`,
+    '',
+  ];
+  const starts = cutStartTimes(shorts.cuts);
+  shorts.cuts.forEach((cut, index) => {
+    const start = starts[index] ?? 0;
+    lines.push(`#${index + 1} [${start.toFixed(1)}s~${(start + cut.duration).toFixed(1)}s] ${roleLabel(index, shorts.cuts.length)} ${cut.emoji}`);
+    lines.push(`  자막: ${stripMarks(cut.subtitle)}`);
+    lines.push(`  읽기: ${narrationOf(cut)}`);
     lines.push('');
   });
+  lines.push(`마지막 자막에 "${shorts.banner}" 라벨을 고정해 두면 시리즈로 묶입니다.`);
+  return lines.join('\n').trim();
+}
+
+/** 컷별 가이드 — 화면에 무엇을 어떻게 올릴지. */
+export function buildGuide(shorts: Shorts): string {
+  const template = TEMPLATE_MAP[shorts.template];
+  const starts = cutStartTimes(shorts.cuts);
+  const lines: string[] = [
+    `${shorts.title} — 컷별 가이드`,
+    `주제: ${shorts.topic}`,
+    `톤: ${TONE_LABEL[shorts.tone]} · 총 ${totalDuration(shorts.cuts).toFixed(1)}초 · 9:16 세로`,
+    '',
+  ];
+  shorts.cuts.forEach((cut, index) => {
+    const start = starts[index] ?? 0;
+    lines.push(`${index + 1}. ${roleLabel(index, shorts.cuts.length)} · ${cut.duration.toFixed(1)}초 · ${start.toFixed(1)}s 시작`);
+    lines.push(`   화면: ${cut.emoji} ${sceneNote(shorts.template, index)}`);
+    lines.push(`   카메라: ${cameraFor(index)}`);
+    lines.push(`   자막: ${stripMarks(cut.subtitle)}`);
+    lines.push('');
+  });
+  lines.push(`업로드 팁: 첫 2초 안에 훅 자막이 떠야 이탈이 줄어듭니다. ${template.banner} 라벨을 유지하면 시리즈로 인식됩니다.`);
   return lines.join('\n');
 }
