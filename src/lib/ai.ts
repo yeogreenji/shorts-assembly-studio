@@ -66,6 +66,7 @@ interface AiCut {
   role?: string;
   emoji?: string;
   subtitle?: string;
+  scene?: string;
   duration?: number;
 }
 
@@ -73,6 +74,7 @@ interface AiPayload {
   ok?: boolean;
   title?: string;
   banner?: string;
+  character?: string;
   cuts?: AiCut[];
   model?: string;
   error?: { code?: string; message?: string };
@@ -92,6 +94,7 @@ function toShots(cuts: AiCut[]): Shot[] | null {
       role: roleOf(index),
       emoji: clampText(String(cut?.emoji ?? '').trim(), 4) || '✨',
       subtitle,
+      scene: clampText(String(cut?.scene ?? '').trim(), 260) || undefined,
       duration: Number.isFinite(duration) ? Math.min(3.6, Math.max(2.2, duration)) : 3,
     });
   }
@@ -99,7 +102,7 @@ function toShots(cuts: AiCut[]): Shot[] | null {
 }
 
 /** 서버 AI에게 6컷 대본을 받아옵니다. 실패하면 예외를 던지고, 호출한 쪽이 내장 엔진으로 넘어갑니다. */
-export async function requestAiShorts(input: AiInput, timeoutMs = 22000): Promise<Shorts> {
+export async function requestAiShorts(input: AiInput, timeoutMs = 30000): Promise<Shorts> {
   const { controller, done } = withTimeout(timeoutMs);
   try {
     const response = await fetch(GENERATE_ENDPOINT, {
@@ -128,6 +131,7 @@ export async function requestAiShorts(input: AiInput, timeoutMs = 22000): Promis
       tone: input.tone,
       banner: clampText(String(payload?.banner ?? '').trim(), 16) || template.banner,
       cuts,
+      character: clampText(String(payload?.character ?? '').trim(), 200) || undefined,
       seed: newSeed(),
       source: 'ai',
       updatedAt: Date.now(),

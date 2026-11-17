@@ -15,6 +15,8 @@ export interface Shot {
   duration: number;
   /** 배경 다시 뽑기 횟수 (0이면 자막 키워드대로) */
   variant?: number;
+  /** AI가 쓴 영어 장면 묘사 — 컷 그림을 만들 때 씁니다 */
+  scene?: string;
 }
 
 export interface Shorts {
@@ -27,6 +29,8 @@ export interface Shorts {
   cuts: Shot[];
   /** 배경 일러스트를 매번 다르게 그리는 무작위 값 */
   seed?: number;
+  /** 6컷에 공통으로 나오는 주인공 외형(영어) */
+  character?: string;
   source: 'local' | 'ai';
   updatedAt: number;
 }

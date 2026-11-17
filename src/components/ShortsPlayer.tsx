@@ -15,10 +15,14 @@ export function ShortsPlayer({
   shorts,
   playNonce,
   seekRequest,
+  art,
+  loadingIds,
 }: {
   shorts: Shorts;
   playNonce: number;
   seekRequest: { index: number; nonce: number } | null;
+  art?: Record<string, string>;
+  loadingIds?: string[];
 }) {
   const template = TEMPLATE_MAP[shorts.template];
   const total = useMemo(() => totalDuration(shorts.cuts), [shorts.cuts]);
@@ -174,7 +178,17 @@ export function ShortsPlayer({
         style={{ height: 'min(62vh, 560px)', aspectRatio: '9 / 16' }}
       >
         {/* 배경 — 컷마다 새로 그려지는 장면 일러스트 */}
-        {cut ? (
+        {cut && art?.[cut.id] ? (
+          <img
+            key={`art-${cut.id}-${art[cut.id]}`}
+            src={art[cut.id]}
+            alt=""
+            draggable={false}
+            data-testid="cut-art"
+            className={`absolute inset-0 h-full w-full object-cover cam-${camera} ${playing ? '' : 'scene-paused'}`}
+            style={{ ['--cut-duration' as string]: `${cut.duration}s`, ...motion }}
+          />
+        ) : cut ? (
           <SceneArt
             key={`${cut.id}-${cut.variant ?? 0}-${shorts.seed ?? 0}`}
             seed={shorts.seed ?? 0}
@@ -218,6 +232,7 @@ export function ShortsPlayer({
               style={{ fontSize: Math.max(8, 28 * scale) }}
               data-testid="cut-badge"
             >
+              {cut && loadingIds?.includes(cut.id) ? '🎨 그리는 중 · ' : ''}
               {activeIndex + 1}/{shorts.cuts.length}
             </span>
           </div>

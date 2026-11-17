@@ -29,7 +29,7 @@ export default function App() {
 
             <div className="mt-3 grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start sm:justify-center">
               <div className="flex justify-center">
-                <ShortsPlayer shorts={shorts} playNonce={studio.playNonce} seekRequest={studio.seekRequest} />
+                <ShortsPlayer shorts={shorts} playNonce={studio.playNonce} seekRequest={studio.seekRequest} art={studio.art} loadingIds={studio.artLoading} />
               </div>
               <div className="mx-auto w-full max-w-[360px] sm:mx-0 sm:max-w-none sm:pt-4">
                 <ExportBar shorts={shorts} notify={studio.notify} vertical />

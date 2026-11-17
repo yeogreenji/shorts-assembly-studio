@@ -115,18 +115,27 @@ const TONE_GUIDE: Record<Tone, string> = {
   humor: '유머 — 과장과 자기비하로 한 번 비틀기. 웃고 나서 고개 끄덕이게.',
 };
 
-const SYSTEM = `[SHORTCUT_SHORTS] 당신은 한국 2030 숏폼 쇼츠 대본 작가입니다. 9:16 세로 쇼츠 6컷 대본을 씁니다.
+const SYSTEM = `[SHORTCUT_SHORTS] 당신은 구독자 100만 한국 숏폼 채널의 메인 작가입니다. 9:16 세로 쇼츠 6컷 대본과, 컷마다 들어갈 웹툰풍 장면 묘사를 씁니다.
 규칙을 어기면 결과 전체가 폐기됩니다.
-1. 정확히 6컷. 1컷은 훅(질문·선언), 2~5컷은 본문, 6컷은 댓글·저장 유도.
-2. 자막은 한 컷에 한 문장, 10~26자. 화면 아래에 크게 뜨는 말이므로 구어체로 짧게 씁니다.
-3. 강조할 단어 1~2개를 *별표*로 감쌉니다. 별표는 반드시 짝을 맞춥니다.
-4. 전체 15~20초. duration은 2.4~3.4 사이 숫자(초), 여섯 개 합이 15~20이 되게 합니다.
-5. 확인되지 않은 수치·효능·1위 주장을 쓰지 않습니다. 실존 인물·회사·브랜드·실제 사건의 이름을 쓰지 않습니다.
-6. emoji는 컷마다 어울리는 이모지 하나(문자 1개).
-7. role은 hook, body, cta만 씁니다.
-8. 설명 문장이나 코드블록 없이 아래 JSON 객체 하나만 출력합니다.
 
-{"title":"영상 제목 16자 이내","banner":"상단 라벨 10자 이내","cuts":[{"role":"hook","emoji":"🥊","subtitle":"*월급*이냐 *칼퇴*냐, 하나만","duration":2.8},{"role":"body","emoji":"💸","subtitle":"","duration":3.0},{"role":"body","emoji":"😵","subtitle":"","duration":3.0},{"role":"body","emoji":"🏃","subtitle":"","duration":3.0},{"role":"body","emoji":"🫠","subtitle":"","duration":2.9},{"role":"cta","emoji":"💬","subtitle":"","duration":3.0}]}`;
+[대본 원칙 — 일기장 말투 금지]
+1. 정확히 6컷. 1컷=훅, 2~5컷=본문, 6컷=댓글·저장 유도.
+2. 훅은 스크롤을 멈추게 해야 합니다. 정보를 일부러 비워 궁금하게 하거나, 구체적인 상황·숫자·반전으로 시작합니다. "오늘은 ~에 대해 알아볼게요", "~가 중요합니다" 같은 설명체·인사·일기체 금지.
+3. 본문 4컷은 한 컷마다 새 정보나 새 장면이 나와야 하고, 뒤로 갈수록 긴장이나 반전이 커집니다. 앞 컷의 말을 바꿔 말하는 반복 금지. 추상어(중요, 좋음, 다양한) 대신 보이는 디테일(시각, 금액 단위, 행동, 물건)을 씁니다.
+4. 말투는 친구에게 던지듯 짧은 구어체. 한 컷 한 문장, 12~28자. 문장 끝을 매번 같은 어미로 맞추지 않습니다.
+5. 마지막 컷은 "댓글 남겨주세요"가 아니라 편을 가르는 질문이나 도발로 끝냅니다. 예) "너라면 1번? 2번? 댓글로 싸우자".
+6. 강조 단어 1~2개를 *별표*로 감쌉니다(짝 필수).
+7. 전체 15~20초, duration은 컷당 2.4~3.4(초), 합계 15~20.
+8. 확인되지 않은 수치·효능·순위를 지어내지 않습니다. 실존 인물·회사·브랜드·실제 사건 이름 금지.
+9. emoji는 컷마다 하나.
+
+[장면 묘사 원칙 — 영상의 그림이 됩니다]
+- character: 영어 한 문장. 6컷 내내 같은 주인공 외형(나이대, 머리, 옷, 특징). 예) "a Korean office worker in his late 20s, messy black hair, navy shirt with loosened tie, round glasses"
+- 컷마다 scene: 영어 2문장 이내(220자 이내). 구도(close-up/wide/low angle), 주인공 행동과 표정, 배경 소품, 빛을 구체적으로. 그 컷 자막의 상황을 그림으로 보여 줘야 합니다. 화면에 글자·숫자·로고가 보이면 안 되므로 text, signs, logos를 묘사하지 않습니다. 실존 인물·브랜드·캐릭터 금지. 폭력·선정 장면 금지.
+- 6컷이 서로 다른 구도·배경이어야 합니다.
+
+[출력] 설명이나 코드블록 없이 JSON 객체 하나만.
+{"title":"영상 제목 16자 이내","banner":"상단 라벨 10자 이내","character":"...","cuts":[{"role":"hook","emoji":"🥊","subtitle":"월급 *1.5배* 줄 테니 평생 야근, 콜?","scene":"Close-up of the protagonist staring wide-eyed at a glowing payslip in a dark office, city lights behind him.","duration":2.8}, ...6개]}`;
 
 function buildUserPrompt(topic: string, template: Template, tone: Tone): string {
   return `[주제]
@@ -285,6 +294,7 @@ interface CleanCut {
   role: 'hook' | 'body' | 'cta';
   emoji: string;
   subtitle: string;
+  scene: string;
   duration: number;
 }
 
@@ -308,6 +318,7 @@ function normalizeCuts(value: unknown): CleanCut[] | null {
       role: raw.role === 'hook' || raw.role === 'cta' || raw.role === 'body' ? raw.role : role,
       emoji,
       subtitle,
+      scene: str(raw.scene, 260),
       duration: Number.isFinite(duration) ? Math.min(3.4, Math.max(2.4, duration)) : 3,
     });
   }
@@ -397,7 +408,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
       model,
       system: SYSTEM,
       user: buildUserPrompt(topic, template, tone),
-      maxTokens: 1_600,
+      maxTokens: 2_400,
     });
     const data = parseJsonContent(completion.content);
     if (!data) {
@@ -415,6 +426,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
       model: completion.model,
       title: str(data.title, 40) || topic,
       banner: str(data.banner, 16) || '',
+      character: str(data.character, 200),
       cuts,
     });
   } catch (error) {
