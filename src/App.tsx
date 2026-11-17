@@ -54,6 +54,8 @@ export default function App() {
             onBlur={studio.normalizeCut}
             onMove={studio.moveCut}
             onJump={studio.jumpTo}
+            onReroll={studio.rerollScene}
+            onRerollAll={studio.rerollAll}
           />
         </div>
 

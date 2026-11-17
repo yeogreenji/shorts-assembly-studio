@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Shorts } from '../types';
 import { TEMPLATE_MAP, cameraFor, roleLabel } from '../lib/templates';
+import { motifsFor } from '../lib/scenes';
+import { SceneArt } from './SceneArt';
 import { cutStartTimes, formatClock, totalDuration } from '../lib/srt';
 import { parseHighlight, stripMarks } from '../lib/text';
 import { isTtsSupported, speak, stopSpeaking } from '../lib/tts';
@@ -143,17 +145,11 @@ export function ShortsPlayer({
   }, []);
 
   const camera = cameraFor(activeIndex);
-  const sceneImage = template.scenes
-    ? activeIndex === 0
-      ? template.scenes.hook
-      : activeIndex === 5
-        ? template.scenes.cta
-        : activeIndex <= 2
-          ? template.scenes.a
-          : template.scenes.b
-    : null;
-  const angles = [150, 132, 168, 142, 158, 126];
-  const background = `linear-gradient(${angles[activeIndex % angles.length]}deg, ${template.palette.from} 0%, ${template.palette.to} 100%)`;
+  const motifs = useMemo(
+    () => motifsFor({ cuts: shorts.cuts, template: shorts.template, seed: shorts.seed, topic: shorts.topic }),
+    [shorts.cuts, shorts.template, shorts.seed, shorts.topic],
+  );
+  const motif = motifs[activeIndex] ?? 'idea';
   const motion = { animationPlayState: playing ? 'running' : ('paused' as const) };
   const stroke = Math.max(1.3, 5.4 * Math.max(0.6, scale * 3.2));
 
@@ -177,40 +173,19 @@ export function ShortsPlayer({
         className="relative shrink-0 cursor-pointer select-none overflow-hidden rounded-[26px] border border-white/12 bg-black shadow-[0_30px_80px_-30px_rgba(0,0,0,0.95)]"
         style={{ height: 'min(62vh, 560px)', aspectRatio: '9 / 16' }}
       >
-        {/* 배경 — 장면 일러스트가 있으면 그림, 없으면 그라데이션 */}
-        {sceneImage ? (
-          <img
-            key={cut?.id}
-            src={sceneImage}
-            alt=""
-            aria-hidden="true"
-            className={`cam-${camera} absolute inset-0 h-full w-full object-cover`}
-            style={{ ['--cut-duration' as string]: `${cut?.duration ?? 3}s`, ...motion }}
+        {/* 배경 — 컷마다 새로 그려지는 장면 일러스트 */}
+        {cut ? (
+          <SceneArt
+            key={`${cut.id}-${cut.variant ?? 0}-${shorts.seed ?? 0}`}
+            seed={shorts.seed ?? 0}
+            uid={`${cut.id}v${cut.variant ?? 0}`}
+            template={shorts.template}
+            motif={motif}
+            index={activeIndex}
+            className={`cam-${camera} ${playing ? '' : 'scene-paused'}`}
+            style={{ ['--cut-duration' as string]: `${cut.duration}s`, ...motion }}
           />
-        ) : (
-          <div
-            key={cut?.id}
-            className={`cam-${camera} absolute inset-0`}
-            style={{ ['--cut-duration' as string]: `${cut?.duration ?? 3}s`, background, ...motion }}
-          />
-        )}
-
-        {/* 색 번짐 — 그라데이션 배경에 입체감을 줍니다 */}
-        <div
-          key={`blob-${cut?.id}`}
-          className="mesh blob-a pointer-events-none absolute inset-0 opacity-70"
-          style={{
-            background: `radial-gradient(closest-side, ${template.palette.accent} 0%, transparent 72%)`,
-            ...motion,
-          }}
-        />
-        <div
-          className="mesh blob-b pointer-events-none absolute inset-0 opacity-45"
-          style={{
-            background: `radial-gradient(closest-side, ${template.palette.from} 0%, transparent 70%)`,
-            ...motion,
-          }}
-        />
+        ) : null}
 
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/45 via-black/5 to-black/75" />
         <div className="grain pointer-events-none absolute inset-0 opacity-[0.18]" />
@@ -247,60 +222,6 @@ export function ShortsPlayer({
             </span>
           </div>
         </div>
-
-        {/* 그라데이션 장면의 깊이 — 얕은 링과 작은 빛망울 */}
-        {cut && !sceneImage ? (
-          <div
-            key={`ring-${cut.id}`}
-            className="ring-pulse pointer-events-none absolute left-1/2 rounded-full border"
-            style={{
-              width: 560 * scale,
-              height: 560 * scale,
-              marginLeft: -280 * scale,
-              top: `calc(21% + ${165 * scale - 280 * scale}px)`,
-              borderColor: `${template.palette.accent}30`,
-            }}
-          />
-        ) : null}
-        {cut && !sceneImage
-          ? [0, 1, 2].map((index) => (
-              <span
-                key={`bokeh-${cut.id}-${index}`}
-                className="bokeh pointer-events-none absolute rounded-full"
-                style={{
-                  width: (18 + index * 9) * scale * 3,
-                  height: (18 + index * 9) * scale * 3,
-                  left: `${16 + index * 30}%`,
-                  top: `${58 - index * 8}%`,
-                  background: template.palette.accent,
-                  opacity: 0.16,
-                  filter: 'blur(6px)',
-                  animationDelay: `${index * 1.4}s`,
-                }}
-              />
-            ))
-          : null}
-
-        {/* 컷 이모지 스티커 — 그라데이션 배경일 때만 크게 (일러스트 장면은 그림을 가리지 않게) */}
-        {cut && !sceneImage ? (
-          <div key={`sticker-${cut.id}`} className="sticker-in absolute inset-x-0 z-10 flex justify-center" style={{ top: '21%' }}>
-            <span
-              className="relative flex items-center justify-center"
-              style={{ width: 330 * scale, height: 330 * scale }}
-            >
-              <span
-                className="absolute inset-0 rounded-full"
-                style={{
-                  background: `radial-gradient(closest-side, ${template.palette.accent}66, transparent 72%)`,
-                  filter: `blur(${Math.max(8, 26 * scale)}px)`,
-                }}
-              />
-              <span className="sticker relative" style={{ fontSize: Math.max(38, 208 * scale) }}>
-                {cut.emoji}
-              </span>
-            </span>
-          </div>
-        ) : null}
 
         {/* 자막 */}
         {cut ? (

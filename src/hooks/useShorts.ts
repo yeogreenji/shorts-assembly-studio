@@ -6,6 +6,7 @@ import { NOTE } from '../lib/messages';
 import { probeGenerateServer, requestAiShorts, type ServerState } from '../lib/ai';
 import { loadShorts, saveShorts } from '../lib/storage';
 import { normalizeMarks } from '../lib/text';
+import { newSeed } from '../lib/scenes';
 
 export interface Toast {
   id: number;
@@ -123,6 +124,25 @@ export function useShorts() {
     });
   }, []);
 
+  /** 이 컷의 배경 일러스트를 다른 것으로 다시 뽑습니다. */
+  const rerollScene = useCallback((id: string) => {
+    setShorts((prev) => ({
+      ...prev,
+      cuts: prev.cuts.map((cut) => (cut.id === id ? { ...cut, variant: (cut.variant ?? 0) + 1 } : cut)),
+      updatedAt: Date.now(),
+    }));
+  }, []);
+
+  /** 모든 컷의 배경을 새로 그립니다. */
+  const rerollAll = useCallback(() => {
+    setShorts((prev) => ({
+      ...prev,
+      seed: newSeed(),
+      cuts: prev.cuts.map((cut) => ({ ...cut, variant: 0 })),
+      updatedAt: Date.now(),
+    }));
+  }, []);
+
   const jumpTo = useCallback((index: number) => {
     seekSeq.current += 1;
     setSeekRequest({ index, nonce: seekSeq.current });
@@ -156,6 +176,8 @@ export function useShorts() {
     updateCut,
     normalizeCut,
     moveCut,
+    rerollScene,
+    rerollAll,
     jumpTo,
     playNonce,
     seekRequest,

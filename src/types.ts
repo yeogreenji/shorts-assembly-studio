@@ -13,6 +13,8 @@ export interface Shot {
   subtitle: string;
   /** 이 컷이 화면에 머무는 시간(초) */
   duration: number;
+  /** 배경 다시 뽑기 횟수 (0이면 자막 키워드대로) */
+  variant?: number;
 }
 
 export interface Shorts {
@@ -23,6 +25,8 @@ export interface Shorts {
   /** 영상 위에 고정으로 뜨는 짧은 라벨 */
   banner: string;
   cuts: Shot[];
+  /** 배경 일러스트를 매번 다르게 그리는 무작위 값 */
+  seed?: number;
   source: 'local' | 'ai';
   updatedAt: number;
 }

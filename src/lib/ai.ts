@@ -1,6 +1,7 @@
 import type { Shorts, Shot, TemplateId, Tone } from '../types';
 import { TEMPLATE_MAP, roleOf } from './templates';
 import { clampText, normalizeMarks } from './text';
+import { newSeed } from './scenes';
 
 /**
  * api/generate.ts (Vercel Serverless Function)와 이야기하는 클라이언트.
@@ -127,6 +128,7 @@ export async function requestAiShorts(input: AiInput, timeoutMs = 22000): Promis
       tone: input.tone,
       banner: clampText(String(payload?.banner ?? '').trim(), 16) || template.banner,
       cuts,
+      seed: newSeed(),
       source: 'ai',
       updatedAt: Date.now(),
     };

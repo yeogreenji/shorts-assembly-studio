@@ -1,6 +1,7 @@
 import type { Shorts, TemplateId } from '../types';
 import { TEMPLATE_MAP, roleOf } from './templates';
 import { clampText } from './text';
+import { newSeed } from './scenes';
 
 const KEY = 'shortcut-studio:shorts:v2';
 
@@ -22,6 +23,7 @@ export function loadShorts(): Shorts | null {
     if (!isShorts(parsed)) return null;
     return {
       ...parsed,
+      seed: typeof parsed.seed === 'number' ? parsed.seed : newSeed(),
       cuts: parsed.cuts.map((cut, index) => ({ ...cut, role: roleOf(index), id: cut.id || `cut-${index}` })),
     };
   } catch {

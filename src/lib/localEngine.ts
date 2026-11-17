@@ -1,6 +1,7 @@
 import type { Shorts, Shot, TemplateId, Tone } from '../types';
 import { CUT_DURATIONS, TEMPLATE_MAP, roleOf } from './templates';
 import { clampText, stripMarks } from './text';
+import { newSeed } from './scenes';
 
 /**
  * AI 키가 없거나 서버에 닿지 않아도 바로 쓸 수 있는 내장 대본 엔진.
@@ -433,6 +434,7 @@ export function buildLocalShorts(input: BuildInput): Shorts {
     tone: input.tone,
     banner: template.banner,
     cuts,
+    seed: newSeed(),
     source: 'local',
     updatedAt: Date.now(),
   };
