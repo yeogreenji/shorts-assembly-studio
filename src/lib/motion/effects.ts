@@ -1,6 +1,6 @@
 import type { CutScene, EffectId } from './scene';
 import { rgba, shade } from './color';
-import { STAGE_H, STAGE_W, glowCircle, layer, quality, type CamState, type RngLike } from './worlds';
+import { STAGE_H, STAGE_W, glowCircle, layer, quality, type CamState, type RngLike } from './stage';
 
 /** 컷마다 다른 파티클 — 비·눈·돈·하트·반짝임·집중선. */
 
@@ -28,16 +28,62 @@ function noteShape(ctx: CanvasRenderingContext2D, x: number, y: number, rotation
   ctx.translate(x, y);
   ctx.rotate(rotation);
   ctx.scale(scale, scale);
-  ctx.fillStyle = color;
-  ctx.strokeStyle = 'rgba(6, 40, 20, 0.75)';
-  ctx.lineWidth = 4;
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetY = 7;
+  const paper = ctx.createLinearGradient(-60, -30, 50, 30);
+  paper.addColorStop(0, '#dcfce7');
+  paper.addColorStop(0.42, color);
+  paper.addColorStop(1, '#15803d');
+  ctx.fillStyle = paper;
   ctx.beginPath();
-  ctx.roundRect(-56, -28, 112, 56, 8);
+  ctx.roundRect(-60, -29, 120, 58, 6);
   ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = 'rgba(12, 62, 38, 0.7)';
+  ctx.lineWidth = 2;
   ctx.stroke();
-  ctx.fillStyle = rgba('#0f5132', 0.85);
+  // 접힌 자국
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+  ctx.lineWidth = 1.6;
   ctx.beginPath();
-  ctx.arc(0, 0, 15, 0, Math.PI * 2);
+  ctx.moveTo(0, -27);
+  ctx.lineTo(0, 27);
+  ctx.stroke();
+  // 초상 자리
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+  ctx.beginPath();
+  ctx.ellipse(-28, 0, 12, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(6, 58, 34, 0.85)';
+  ctx.font = '800 20px Pretendard, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('₩', 24, 1);
+  ctx.restore();
+}
+
+function coinShape(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, spin: number): void {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(Math.max(0.25, Math.abs(Math.cos(spin))), 1);
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+  ctx.shadowBlur = 14;
+  const gold = ctx.createLinearGradient(-radius, -radius, radius, radius);
+  gold.addColorStop(0, '#fff6c2');
+  gold.addColorStop(0.45, '#fbbf24');
+  gold.addColorStop(1, '#b45309');
+  ctx.fillStyle = gold;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = 'rgba(120, 63, 4, 0.6)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+  ctx.beginPath();
+  ctx.ellipse(-radius * 0.3, -radius * 0.35, radius * 0.32, radius * 0.2, -0.6, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -108,17 +154,20 @@ export function drawAmbient(ctx: CanvasRenderingContext2D, cut: CutScene, cam: C
       }
     }
     if (weather.includes('petals')) {
-      for (let index = 0; index < count(26); index += 1) {
-        const baseX = rng.range(0, STAGE_W);
-        const speed = rng.range(70, 160);
-        const y = drift(t, speed, rng.range(0, 2100), 2100);
-        const x = baseX + Math.sin(t * 1.1 + index * 0.7) * 60;
+      const colors = ['#ffc7d8', '#ffd9e6', '#f9b8cf', '#ffe9d6'];
+      for (let index = 0; index < count(34); index += 1) {
+        const baseX = rng.range(-60, STAGE_W + 60);
+        const speed = rng.range(70, 180);
+        const y = drift(t, speed, rng.range(0, 2200), 2200);
+        const x = baseX + Math.sin(t * 1.1 + index * 0.7) * 70;
+        const size = rng.range(7, 14);
         ctx.save();
         ctx.translate(x, y);
-        ctx.rotate(t * 1.6 + index);
-        ctx.fillStyle = rgba('#ffc7d8', 0.8);
+        ctx.rotate(t * 1.5 + index);
+        ctx.globalAlpha = 0.55 + 0.3 * Math.abs(Math.sin(t * 1.3 + index));
+        ctx.fillStyle = colors[index % colors.length] ?? '#ffc7d8';
         ctx.beginPath();
-        ctx.ellipse(0, 0, 12, 7, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, 0, size, size * 0.58, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
@@ -168,6 +217,48 @@ export function drawForeground(ctx: CanvasRenderingContext2D, cut: CutScene, cam
   });
 
   layer(ctx, cam, 0.78, () => {
+    if (effects.includes('light')) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      for (let index = 0; index < 5; index += 1) {
+        const angle = -0.5 + index * 0.26 + Math.sin(t * 0.4 + index) * 0.04;
+        const x0 = STAGE_W * 0.42 + Math.cos(angle) * 220;
+        const length = 1700;
+        const drift0 = Math.sin(angle) * length;
+        const gradient = ctx.createLinearGradient(x0, 0, x0 + drift0, length);
+        gradient.addColorStop(0, rgba(pal.accent, 0.2 * (0.6 + 0.4 * Math.sin(t * 0.8 + index))));
+        gradient.addColorStop(1, rgba(pal.accent, 0));
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.moveTo(x0 - 34, 0);
+        ctx.lineTo(x0 + 34, 0);
+        ctx.lineTo(x0 + drift0 + 210, length);
+        ctx.lineTo(x0 + drift0 - 210, length);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    if (effects.includes('shards')) {
+      for (let index = 0; index < count(14); index += 1) {
+        const x = rng.range(60, STAGE_W - 60);
+        const speed = rng.range(200, 460);
+        const y = drift(t, speed, rng.range(0, 2200), 2200);
+        const size = rng.range(9, 22);
+        ctx.save();
+        ctx.translate(x + Math.sin(t * 2 + index) * 30, y);
+        ctx.rotate(t * 2.4 + index);
+        ctx.fillStyle = rgba(index % 3 === 0 ? '#ffffff' : pal.accent, 0.55 + 0.35 * Math.sin(t * 3 + index));
+        ctx.beginPath();
+        ctx.moveTo(0, -size);
+        ctx.lineTo(size * 0.42, 0);
+        ctx.lineTo(0, size);
+        ctx.lineTo(-size * 0.42, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
     if (effects.includes('dust')) {
       for (let index = 0; index < count(42); index += 1) {
         const x = rng.range(0, STAGE_W);
@@ -191,11 +282,16 @@ export function drawForeground(ctx: CanvasRenderingContext2D, cut: CutScene, cam
       }
     }
     if (effects.includes('money')) {
-      for (let index = 0; index < 16; index += 1) {
+      for (let index = 0; index < 10; index += 1) {
         const x = rng.range(0, STAGE_W);
-        const speed = rng.range(140, 320);
+        const speed = rng.range(150, 330);
         const y = drift(t, speed, rng.range(0, 2200), 2200);
-        noteShape(ctx, x + Math.sin(t * 1.4 + index) * 26, y, t * 1.3 + index, rng.range(0.5, 0.95), index % 4 === 0 ? '#fde047' : '#86efac');
+        const sway = x + Math.sin(t * 1.4 + index) * 26;
+        if (index % 3 === 0) {
+          coinShape(ctx, sway, y, rng.range(11, 18), t * 2.6 + index);
+        } else {
+          noteShape(ctx, sway, y, Math.sin(t * 1.1 + index) * 0.5, rng.range(0.4, 0.68), '#4ade80');
+        }
       }
     }
     if (effects.includes('heart')) {

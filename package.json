@@ -1,9 +1,9 @@
 {
   "name": "shortcut-studio",
   "private": true,
-  "version": "4.0.0",
+  "version": "5.0.0",
   "type": "module",
-  "description": "주제 한 줄로 컷마다 다른 모션 일러스트가 움직이는 6컷 쇼츠를 만들고, 영상(.webm)으로 저장하는 스튜디오",
+  "description": "주제 한 줄로 웹툰·로판 일러스트 6컷이 살아 움직이는 쇼츠를 만들고, 영상(.webm)으로 저장하는 스튜디오",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

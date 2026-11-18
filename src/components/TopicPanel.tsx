@@ -1,6 +1,9 @@
+import { useMemo } from 'react';
 import type { Studio } from '../hooks/useShorts';
 import { TEMPLATES, TEMPLATE_MAP, TONES, TONE_LABEL } from '../lib/templates';
 import { serverDetail, serverLabel } from '../lib/messages';
+import { buildScenePlan } from '../lib/motion/scene';
+import { artUrl } from '../lib/motion/artLoader';
 
 /**
  * 첫 화면. 주제 한 줄 → 템플릿 한 번 → 톤 하나 → 버튼 하나.
@@ -11,18 +14,51 @@ export function TopicPanel({ studio }: { studio: Studio }) {
     studio;
   const current = TEMPLATE_MAP[template];
   const aiReady = server.state === 'ai';
+  const plan = useMemo(() => buildScenePlan(shorts), [shorts]);
+  const previewArts = plan.cuts.slice(0, 6);
 
   return (
     <section className="panel p-4 sm:p-6" aria-labelledby="topic-heading">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-brand-300/80">주제 한 줄 → 6컷 쇼츠</p>
-      <h1 id="topic-heading" className="mt-2 text-[22px] font-black leading-[1.25] tracking-tight text-white sm:text-[26px]">
-        한 줄만 적으면,
+      <div className="flex items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-300/30 bg-brand-500/10 px-2.5 py-1 text-[10px] font-bold tracking-wide text-brand-200">
+          <span className="h-1.5 w-1.5 rounded-full bg-brand-300" aria-hidden="true" />
+          웹툰 · 로판 아트 엔진
+        </span>
+        <span className="text-[10px] text-zinc-500">일러스트 {31}장</span>
+      </div>
+
+      <h1 id="topic-heading" className="display mt-3 text-[24px] font-black leading-[1.22] text-white sm:text-[29px]">
+        예쁜 얼굴의 웹툰 일러스트가
         <br />
-        바로 움직이는 쇼츠가 나옵니다.
+        <span className="bg-gradient-to-r from-brand-200 via-brand-300 to-[#b79bff] bg-clip-text text-transparent">
+          살아 움직이는 6컷
+        </span>
       </h1>
       <p className="mt-2 text-[12px] leading-relaxed text-zinc-400">
-        훅 → 포인트 → 투표까지 6컷을 자동으로 조립하고, 그 자리에서 재생·수정·저장합니다.
+        로판 드레스부터 오피스 로맨스, 비 오는 밤까지 — 컷마다 다른 일러스트에 켄 번즈 카메라·꽃잎·비·빛·자막이
+        붙어 진짜 AI 영상처럼 흐릅니다.
       </p>
+
+      {/* 이 스튜디오가 쓰는 아트 미리보기 */}
+      <div className="relative mt-3 overflow-hidden rounded-xl border border-white/[0.06] bg-black/30 p-1.5">
+        <div className="grid grid-cols-6 gap-1.5">
+          {previewArts.map((cut, index) => (
+            <div key={`${cut.art.id}-${index}`} className="relative overflow-hidden rounded-md">
+              <img
+                src={artUrl(cut.art.file)}
+                alt={cut.art.title}
+                loading="lazy"
+                decoding="async"
+                className="aspect-[9/16] w-full object-cover opacity-95"
+              />
+              <span className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
+            </div>
+          ))}
+        </div>
+        <p className="mt-1.5 px-1 pb-0.5 text-[10px] text-zinc-500">
+          이 대본에 배정된 아트 · 컷마다 다른 얼굴과 장면
+        </p>
+      </div>
 
       <label htmlFor="topic-input" className="mt-5 block text-[12px] font-bold text-zinc-200">
         주제
@@ -64,7 +100,7 @@ export function TopicPanel({ studio }: { studio: Studio }) {
               onClick={() => selectTemplate(item.id)}
               className={`rounded-xl border px-2.5 py-2 text-left transition ${
                 active
-                  ? 'border-brand-400/60 bg-brand-500/15 text-brand-100'
+                  ? 'border-brand-300/60 bg-brand-500/15 text-brand-100 shadow-[0_10px_30px_-20px_rgba(240,86,159,0.9)]'
                   : 'border-white/10 bg-white/[0.02] text-zinc-300 hover:border-white/25'
               }`}
             >
@@ -96,7 +132,7 @@ export function TopicPanel({ studio }: { studio: Studio }) {
               onClick={() => setTone(item.id)}
               className={`rounded-xl border px-2 py-2 text-[12px] font-bold transition ${
                 active
-                  ? 'border-brand-400/60 bg-brand-500/15 text-brand-100'
+                  ? 'border-brand-300/60 bg-brand-500/15 text-brand-100'
                   : 'border-white/10 bg-white/[0.02] text-zinc-300 hover:border-white/25'
               }`}
             >
@@ -111,7 +147,7 @@ export function TopicPanel({ studio }: { studio: Studio }) {
         data-testid="generate"
         onClick={() => void generate()}
         disabled={generating}
-        className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-brand-400 to-brand-600 px-4 py-3.5 text-[15px] font-black text-white shadow-xl shadow-brand-600/30 transition hover:from-brand-400 hover:to-brand-500 active:scale-[0.995] disabled:cursor-progress disabled:opacity-70"
+        className="btn-primary mt-5 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-[15px] font-black text-white transition active:scale-[0.995] disabled:cursor-progress disabled:opacity-70"
       >
         {generating ? (
           <>
@@ -141,7 +177,9 @@ export function TopicPanel({ studio }: { studio: Studio }) {
         <span aria-hidden="true">·</span>
         <span>{TONE_LABEL[tone]} 톤</span>
         <span aria-hidden="true">·</span>
-        <span>지금 {shorts.cuts.length}컷 {totalSeconds.toFixed(1)}초</span>
+        <span>
+          지금 {shorts.cuts.length}컷 {totalSeconds.toFixed(1)}초
+        </span>
       </div>
       <p className="mt-2 text-[10px] leading-relaxed text-zinc-700">
         마지막 컷은 투표 유도 컷입니다. 대본은 브라우저에 자동 저장됩니다.

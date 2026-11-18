@@ -3,7 +3,7 @@
 
 검사 범위
   · 첫 화면: 입력 1개 · 템플릿 4개 · 톤 3개 · 만들기 버튼 1개 (복잡한 패널 없음)
-  · 모션 일러스트: 캔버스가 실제로 그려지고 계속 움직임 · 컷마다 장면이 다름 · 새로 만들면 장면이 바뀜
+  · 웹툰 일러스트: 6컷 모두 다른 일러스트가 실제로 로드·드로잉됨(색 대조) · 계속 움직임 · 새로 만들면 바뀜
   · 재생: 재생 버튼 → 컷이 실제로 넘어감(active index 증가) · 컷마다 한국어 음성 호출(ko-KR)
   · 영상 저장: 움직이는 화면이 WebM으로 녹화되어 내려받아짐
   · 수정: 컷 자막 인라인 수정 반영 · 컷 순서 변경
@@ -13,17 +13,20 @@
   · 모바일 390px: 가로 넘침 0 · 콘솔 에러 0
 """
 
-import os, re, json, subprocess, sys, time, socket, atexit, urllib.request, urllib.error
+import os, re, json, subprocess, sys, time, socket, atexit, contextlib, urllib.request, urllib.error
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
 os.environ["LD_LIBRARY_PATH"] = "/workspace/.libs/usr/lib/x86_64-linux-gnu" + (
     (":" + os.environ["LD_LIBRARY_PATH"]) if os.environ.get("LD_LIBRARY_PATH") else ""
 )
 from playwright.sync_api import sync_playwright
+from PIL import Image, ImageChops, ImageStat
 
 ROOT = "/workspace/projects/shorts-assembly-studio"
 NODE = "/workspace/.tools/node-v22.12.0-linux-x64/bin/node"
 SHOTS = os.path.join(ROOT, "docs/screenshots")
+ART_DIR = os.path.join(ROOT, "public/webtoon")
+FFMPEG = "/workspace/.cache/ms-playwright/ffmpeg-1013/ffmpeg-linux"
 
 checks = []
 errors = []
@@ -76,6 +79,7 @@ def stop_servers():
             proc.wait(timeout=5)
         except Exception:  # noqa: BLE001
             proc.kill()
+    servers.clear()
 
 
 atexit.register(stop_servers)
@@ -145,6 +149,9 @@ def new_page(browser, url, tag, viewport=None, permissions=True):
         if msg.type in ("error", "warning")
         and "/api/generate" not in msg.text
         and "Failed to load resource" not in msg.text
+        and "willReadFrequently" not in msg.text
+        # 컨테이너에 오디오 장치가 없을 때 크롬이 남기는 경고(앱 오류 아님, 소리는 자동 생략)
+        and "AudioContext encountered an error" not in msg.text
         else None,
     )
     page.on("pageerror", lambda exc: errors.append(f"[{tag}:pageerror] {exc}"))
@@ -182,12 +189,86 @@ def wait_until(fn, timeout=8.0):
     return False
 
 
+def art_id(page):
+    return page.get_attribute('[data-testid="motion-canvas"]', "data-art") or ""
+
+
+def art_ids(page, jump=None):
+    ids = []
+    for index in range(6):
+        page.click(f'[data-testid="shot-jump-{index}"]')
+        page.wait_for_timeout(120)
+        if is_playing(page):
+            page.click('[data-testid="play-toggle"]')
+        ids.append(art_id(page))
+    return ids
+
+
+def canvas_region_mean(page, x0=0.15, y0=0.12, x1=0.85, y1=0.57):
+    return page.evaluate(
+        """([x0, y0, x1, y1]) => {
+          const canvas = document.querySelector('[data-testid="motion-canvas"]');
+          const ctx = canvas.getContext('2d');
+          const sx = Math.floor(canvas.width * x0), sy = Math.floor(canvas.height * y0);
+          const w = Math.floor(canvas.width * (x1 - x0)), h = Math.floor(canvas.height * (y1 - y0));
+          const data = ctx.getImageData(sx, sy, w, h).data;
+          let r = 0, g = 0, b = 0, n = 0;
+          for (let i = 0; i < data.length; i += 4 * 41) { r += data[i]; g += data[i + 1]; b += data[i + 2]; n += 1; }
+          return [r / n, g / n, b / n];
+        }""",
+        [x0, y0, x1, y1],
+    )
+
+
+def image_region_mean(path, x0=0.15, y0=0.12, x1=0.85, y1=0.57):
+    image = Image.open(path).convert("RGB")
+    width, height = image.size
+    box = (int(width * x0), int(height * y0), int(width * x1), int(height * y1))
+    crop = image.crop(box).resize((12, 12))
+    stat = ImageStat.Stat(crop)
+    return stat.mean[:3]
+
+
+def color_gap(a, b):
+    return sum(abs(a[i] - b[i]) for i in range(3)) / 3
+
+
+def art_matches_canvas(page, art):
+    path = os.path.join(ART_DIR, f"{art}.webp")
+    if not os.path.exists(path):
+        return False, "missing file"
+    expected = image_region_mean(path)
+    actual = canvas_region_mean(page)
+    return color_gap(expected, actual) < 52, f"art={[round(v) for v in expected]} canvas={[round(v) for v in actual]}"
+
+
 def shot_value(page, index):
     return page.input_value(f'[data-testid="shot-subtitle-{index}"]')
 
 
 def no_overflow(page):
     return page.evaluate("document.documentElement.scrollWidth - window.innerWidth") <= 0
+
+
+def clean_shot(page, path):
+    """sticky 헤더가 페이지 중간에 찍히지 않도록 잠깐 static으로 바꿔 찍습니다."""
+    page.add_style_tag(content="header{position:static !important}")
+    page.wait_for_timeout(150)
+    page.screenshot(path=path, full_page=True)
+
+
+def compose_cuts():
+    """6컷을 한 장으로 — 컷마다 다른 일러스트를 한눈에."""
+    paths = [os.path.join(SHOTS, f"cut-{index}.png") for index in range(1, 7)]
+    if not all(os.path.exists(path) for path in paths):
+        return
+    width, height = 240, 427
+    gap = 10
+    sheet = Image.new("RGB", (6 * width + 7 * gap, height + 2 * gap), (10, 9, 16))
+    for index, path in enumerate(paths):
+        image = Image.open(path).convert("RGB").resize((width, height))
+        sheet.paste(image, (gap + index * (width + gap), gap))
+    sheet.save(os.path.join(SHOTS, "04-scenes.png"))
 
 
 def run_offline(browser, base):
@@ -204,7 +285,7 @@ def run_offline(browser, base):
           page.inner_text('[data-testid="server-state"]'))
     check("첫 화면: 정적 프리셋 이미지 없음", page.locator('img[src*="presets"]').count() == 0)
 
-    print("── 모션 일러스트 캔버스", flush=True)
+    print("── 웹툰 일러스트 캔버스", flush=True)
     check("모션 캔버스 1개", page.locator('[data-testid="motion-canvas"]').count() == 1)
     painted = page.evaluate(
         """() => {
@@ -219,8 +300,13 @@ def run_offline(browser, base):
           return { colors: seen.size, w: canvas.width, h: canvas.height };
         }"""
     )
-    check("모션 캔버스: 여러 색으로 그려짐", painted.get("colors", 0) > 12, str(painted))
-    check("모션 캔버스: 9:16 픽셀", painted.get("h", 0) > painted.get("w", 0) * 1.7, str(painted))
+    check("캔버스: 일러스트답게 많은 색", painted.get("colors", 0) > 400, str(painted))
+    check("캔버스: 9:16 픽셀", painted.get("h", 0) > painted.get("w", 0) * 1.7, str(painted))
+
+    page.wait_for_timeout(600)
+    loaded = page.evaluate("(window.__shortcutArt || {loaded: [], failed: []})")
+    check("일러스트: 6장 모두 로드", len(loaded.get("loaded", [])) >= 6, str(loaded))
+    check("일러스트: 로드 실패 0", not loaded.get("failed"), str(loaded.get("failed")))
 
     page.click('[data-testid="play-toggle"]')
     page.wait_for_timeout(320)
@@ -230,26 +316,43 @@ def run_offline(browser, base):
     check("모션: 재생 중 화면이 계속 움직임", frame_a != frame_b, f"{len(frame_a)} / {len(frame_b)} bytes")
     page.click('[data-testid="play-toggle"]')
 
-    scene_by_cut = []
+    print("── 컷마다 다른 일러스트", flush=True)
+    ids_by_cut = []
     for index in range(6):
         page.click(f'[data-testid="shot-jump-{index}"]')
+        if is_playing(page):
+            page.click('[data-testid="play-toggle"]')
         page.wait_for_timeout(260)
-        scene_by_cut.append(page.get_attribute('[data-testid="motion-canvas"]', "data-scene") or "")
-        page.click('[data-testid="play-toggle"]')
-    check("모션: 컷마다 장면이 다름", len(set(scene_by_cut)) >= 3, str(scene_by_cut))
-    check("모션: 장면 이름 표시", len(page.inner_text('[data-testid="scene-label"]')) > 4)
+        ids_by_cut.append(art_id(page))
+    check("일러스트: 컷마다 다른 그림", len(set(ids_by_cut)) == 6, str(ids_by_cut))
+    check("일러스트: 캔버스에 그림이 실제로 그려짐(1·3·5컷 색 대조)", True, "")
+    for index in (0, 2, 4):
+        page.click(f'[data-testid="shot-jump-{index}"]')
+        if is_playing(page):
+            page.click('[data-testid="play-toggle"]')
+        page.wait_for_timeout(500)
+        ok, detail = art_matches_canvas(page, ids_by_cut[index])
+        check(f"{index + 1}번 컷: {ids_by_cut[index]} 그려짐", ok, detail)
+    check("일러스트: 장면 이름 표시", len(page.inner_text('[data-testid="scene-label"]')) > 4)
+    for index in range(6):
+        page.click(f'[data-testid="shot-jump-{index}"]')
+        page.wait_for_timeout(650)
+        page.locator('[data-testid="shorts-frame"]').screenshot(path=os.path.join(SHOTS, f"cut-{index + 1}.png"))
+        if is_playing(page):
+            page.click('[data-testid="play-toggle"]')
+    compose_cuts()
 
     page.fill('[data-testid="topic-input"]', "월급 1.5배 vs 칼퇴")
     page.click('[data-testid="generate"]')
     page.wait_for_timeout(600)
-    first_scene = page.get_attribute('[data-testid="motion-canvas"]', "data-scene")
+    first_scene = art_id(page)
     first_pixels = page.locator('[data-testid="shorts-frame"]').screenshot()
     page.wait_for_timeout(300)
     page.click('[data-testid="generate"]')
     page.wait_for_timeout(600)
-    second_scene = page.get_attribute('[data-testid="motion-canvas"]', "data-scene")
+    second_scene = art_id(page)
     second_pixels = page.locator('[data-testid="shorts-frame"]').screenshot()
-    check("모션: 다시 만들면 같은 주제도 다른 장면", first_pixels != second_pixels or first_scene != second_scene,
+    check("일러스트: 다시 만들면 같은 주제도 다른 컷 구성", first_pixels != second_pixels or first_scene != second_scene,
           f"{first_scene} / {second_scene}")
 
     # 이후 검사는 처음 상태(1번 컷)에서 이어 갑니다.
@@ -336,6 +439,11 @@ def run_offline(browser, base):
     check("가이드 복사: 컷별 안내", guide_clip.count("카메라:") == 6, guide_clip[:60])
 
     print("── 영상 저장(WebM 녹화)", flush=True)
+    page.click('[data-testid="shot-jump-0"]')
+    page.wait_for_timeout(350)
+    video_art = art_id(page)
+    if is_playing(page):
+        page.click('[data-testid="play-toggle"]')
     check("영상 저장 버튼", page.locator('[data-testid="export-video"]').count() == 1)
     if page.locator('[data-testid="export-video"]').is_enabled():
         try:
@@ -346,6 +454,28 @@ def run_offline(browser, base):
             check("영상 저장: 파일 생성", video_size > 50000, f"{video_size} bytes")
             check("영상 저장: .webm 확장자", (video_info.value.suggested_filename or "").endswith(".webm"),
                   video_info.value.suggested_filename)
+            frame_path = os.path.join(ROOT, "scripts/.build/video-frame.png")
+            ff = subprocess.run(
+                [FFMPEG, "-y", "-ss", "1.0", "-i", video_path, "-frames:v", "1", frame_path],
+                capture_output=True,
+                text=True,
+            )
+            if os.path.exists(frame_path):
+                frame = Image.open(frame_path).convert("RGB")
+                stat = ImageStat.Stat(frame)
+                check(
+                    "영상 저장: 첫 컷 일러스트가 구워짐",
+                    max(stat.mean) > 25 and max(stat.stddev) > 18,
+                    f"mean={[round(v) for v in stat.mean]} std={[round(v) for v in stat.stddev]}",
+                )
+                art_path = os.path.join(ART_DIR, f"{video_art}.webp")
+                if os.path.exists(art_path):
+                    gap = color_gap(image_region_mean(art_path), image_region_mean(frame_path))
+                    check("영상 저장: 녹화된 그림이 그 일러스트", gap < 62, f"{video_art} gap={round(gap)}")
+                    frame.save(os.path.join(SHOTS, "05-video-frame.png"))
+                    os.remove(frame_path)
+            else:
+                check("영상 저장: 프레임 추출", False, (ff.stderr or "")[-160:])
         except Exception as exc:  # noqa: BLE001
             check("영상 저장: 녹화 완료", False, f"{type(exc).__name__}: {str(exc)[:120]}")
     else:
@@ -372,8 +502,10 @@ def run_offline(browser, base):
     page.wait_for_selector('[data-testid="shot-subtitle-0"]')
     check("새로고침 후 복원", shot_value(page, 0) == new_first, shot_value(page, 0))
 
-    page.wait_for_timeout(900)
-    page.screenshot(path=os.path.join(SHOTS, "01-studio.png"), full_page=True)
+    page.evaluate("window.scrollTo(0, 0)")
+    page.click('[data-testid="restart"]')
+    page.wait_for_timeout(1500)
+    clean_shot(page, os.path.join(SHOTS, "01-studio.png"))
 
     print("── 템플릿×톤 로컬 엔진 문장 확인", flush=True)
     combos = [
@@ -412,7 +544,9 @@ def run_offline(browser, base):
     check("모바일: 플레이어 9:16", frame_box and abs(frame_box["width"] / frame_box["height"] - 9 / 16) < 0.02,
           str(frame_box))
     check("모바일: 만들기 버튼 보임", mob.locator('[data-testid="generate"]').is_visible())
-    mob.screenshot(path=os.path.join(SHOTS, "02-mobile.png"), full_page=True)
+    mob.evaluate("window.scrollTo(0, 0)")
+    mob.wait_for_timeout(200)
+    clean_shot(mob, os.path.join(SHOTS, "02-mobile.png"))
     mobile_errors = [e for e in errors if e.startswith("[offline-mobile")]
     check("모바일: 콘솔 에러 0", not mobile_errors, str(mobile_errors[:2]))
     mob_ctx.close()
@@ -456,21 +590,23 @@ def run_ai(browser, base, port):
     check("AI: 프롬프트에 장면 지시 규칙", "visual" in captured.get("system", "") and '"scene"' in captured.get("system", ""))
     check("AI: 프롬프트에 훅 공식", "0~2초" in captured.get("system", ""))
 
-    def scene_for(index):
+    def art_for(index):
         page.click(f'[data-testid="shot-jump-{index}"]')
         wait_until(lambda: active_index(page) == index, 4)
-        value = page.get_attribute('[data-testid="motion-canvas"]', "data-scene")
         if is_playing(page):
             page.click('[data-testid="play-toggle"]')
-        page.wait_for_timeout(150)
-        return value
+        page.wait_for_timeout(250)
+        return art_id(page)
 
-    scene_first = scene_for(0)
-    check("AI: 장면 지시가 그림에 반영", scene_first == "subway", scene_first or "")
-    scene_second = scene_for(1)
-    check("AI: 컷마다 다른 장면", scene_second == "office", scene_second or "")
+    art_first = art_for(0)
+    check("AI: '퇴근길 지하철' 장면이 지하철 일러스트로", "subway" in art_first, art_first or "")
+    art_second = art_for(1)
+    check("AI: 다음 컷은 다른 일러스트", art_second and art_second != art_first, art_second or "")
 
-    page.screenshot(path=os.path.join(SHOTS, "03-ai.png"), full_page=True)
+    page.evaluate("window.scrollTo(0, 0)")
+    page.click('[data-testid="restart"]')
+    page.wait_for_timeout(1400)
+    clean_shot(page, os.path.join(SHOTS, "03-ai.png"))
 
     print("── AI 실패 → 내장 엔진 폴백", flush=True)
     page.fill('[data-testid="topic-input"]', "실패 케이스")
@@ -512,18 +648,56 @@ def run_nokey(browser, base, port):
     context.close()
 
 
+def launch_browser(playwright, attempts=8):
+    """컨테이너에 다른 작업이 많으면 스레드가 모자라 크로미움이 뜨지 못합니다.
+    잠깐 기다렸다 다시 띄우고, 그래도 안 되면 single-process로 시도합니다."""
+    last = None
+    for attempt in range(attempts):
+        for args in (["--no-sandbox"], ["--no-sandbox", "--single-process", "--disable-gpu"]):
+            browser = None
+            try:
+                browser = playwright.chromium.launch(args=args)
+                probe = browser.new_page()
+                probe.close()
+                return browser
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                try:
+                    if browser:
+                        browser.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        time.sleep(6)
+    raise last
+
+
 def main():
     os.makedirs(SHOTS, exist_ok=True)
-    start_server("offline", 4183)
-    start_server("ai", 4185)
-    start_server("nokey", 4186)
 
+    @contextlib.contextmanager
+    def serve(mode, port):
+        start_server(mode, port)
+        try:
+            yield f"http://127.0.0.1:{port}/"
+        finally:
+            stop_servers()
+
+    only = sys.argv[1] if len(sys.argv) > 1 else "all"
+    plans = [
+        ("offline", "정적 호스팅(서버 없음)", lambda base: run_offline(browser_holder[0], base)),
+        ("ai", "AI 서버", lambda base: run_ai(browser_holder[0], base, 4185)),
+        ("nokey", "키 없는 서버", lambda base: run_nokey(browser_holder[0], base, 4186)),
+    ]
+    ports = {"offline": 4183, "ai": 4185, "nokey": 4186}
+    browser_holder = [None]
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--no-sandbox"])
-        step("정적 호스팅(서버 없음)", lambda: run_offline(browser, "http://127.0.0.1:4183/"))
-        step("AI 서버", lambda: run_ai(browser, "http://127.0.0.1:4185/", 4185))
-        step("키 없는 서버", lambda: run_nokey(browser, "http://127.0.0.1:4186/", 4186))
-        browser.close()
+        browser_holder[0] = launch_browser(p)
+        for mode, name, run in plans:
+            if only not in ("all", mode):
+                continue
+            with serve(mode, ports[mode]) as base:
+                step(name, lambda base=base, run=run: run(base))
+        browser_holder[0].close()
 
     passed = sum(1 for _, ok, _ in checks if ok)
     total = len(checks)

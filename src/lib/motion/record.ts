@@ -1,5 +1,6 @@
 import type { ScenePlan } from './scene';
 import { renderFrame } from './draw';
+import { preloadArts } from './artLoader';
 
 /** 모션 일러스트를 그대로 WebM 영상으로 녹화합니다. (서버·유료 API 없이 브라우저만 사용) */
 
@@ -48,7 +49,7 @@ function pickMime(): string | null {
 }
 
 /** 짧은 비트 — 오실레이터로 그 자리에서 만듭니다. */
-function startBeat(duration: number): { stream: MediaStream; stop: () => void } | null {
+async function startBeat(duration: number): Promise<{ stream: MediaStream; stop: () => void } | null> {
   const AudioCtor =
     typeof window !== 'undefined'
       ? window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -107,7 +108,23 @@ function startBeat(duration: number): { stream: MediaStream; stop: () => void } 
       bass.stop(start + time + beat * 0.95);
     }
 
-    void ctx.resume();
+    let failed = false;
+    ctx.addEventListener?.('error', () => {
+      failed = true;
+    });
+    await ctx.resume().catch(() => {
+      failed = true;
+    });
+    // 오디오 장치가 없는 환경(일부 헤드리스 브라우저)에서는 소리 없이 영상만 기록합니다.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    if (failed || ctx.state !== 'running') {
+      try {
+        void ctx.close();
+      } catch {
+        /* 이미 닫힘 */
+      }
+      return null;
+    }
     return {
       stream: destination.stream,
       stop: () => {
@@ -128,6 +145,14 @@ export async function exportVideo(plan: ScenePlan, options: VideoExportOptions =
   const mimeType = pickMime();
   if (!mimeType) throw new Error('이 브라우저에서 쓸 수 있는 영상 형식이 없습니다.');
 
+  // 일러스트와 웹폰트가 준비된 뒤에 녹화를 시작합니다 — 빈 배경이 찍히지 않게.
+  await preloadArts(plan.cuts.map((cut) => cut.art.id));
+  try {
+    await document.fonts?.ready;
+  } catch {
+    /* 폰트 로딩을 기다릴 수 없는 브라우저 */
+  }
+
   const width = options.width ?? 720;
   const height = options.height ?? 1280;
   const total = Math.max(1, plan.total);
@@ -139,7 +164,7 @@ export async function exportVideo(plan: ScenePlan, options: VideoExportOptions =
   // 그린 프레임이 반드시 녹화되도록 직접 프레임을 밀어 넣습니다.
   const stream = canvas.captureStream(0);
   const videoTrack = stream.getVideoTracks()[0] as (MediaStreamTrack & { requestFrame?: () => void }) | undefined;
-  const beat = options.beat === false ? null : startBeat(total);
+  const beat = options.beat === false ? null : await startBeat(total);
   if (beat) {
     for (const track of beat.stream.getAudioTracks()) stream.addTrack(track);
   }
@@ -181,7 +206,8 @@ export async function exportVideo(plan: ScenePlan, options: VideoExportOptions =
   });
 
   recorder.stop();
-  await finished;
+  // 오디오 장치가 없는 환경에서도 녹화가 멈추지 않게 안전장치를 둡니다.
+  await Promise.race([finished, new Promise<void>((resolve) => setTimeout(resolve, 4000))]);
   beat?.stop();
   for (const track of stream.getTracks()) track.stop();
 

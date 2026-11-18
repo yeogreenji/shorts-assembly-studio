@@ -19,6 +19,37 @@ export function parseHighlight(input: string): Segment[] {
   return segments.length ? segments : [{ text: input, highlighted: false }];
 }
 
+export interface CaptionToken {
+  text: string;
+  highlighted: boolean;
+}
+
+/**
+ * 자막을 단어 토큰으로 나눕니다. 강조 구간 뒤에 붙은 쉼표·마침표는 앞 단어에 붙여,
+ * 줄이 바뀔 때 문장부호만 다음 줄로 떨어지지 않게 합니다.
+ */
+export function captionTokens(input: string): CaptionToken[] {
+  const leadingPunctuation = /^[,.;:!?…~)\]}」』】]/;
+  const tokens: CaptionToken[] = [];
+  for (const segment of parseHighlight(input)) {
+    for (const piece of segment.text.split(/(\s+)/)) {
+      if (!piece) continue;
+      if (/^\s+$/.test(piece)) {
+        tokens.push({ text: ' ', highlighted: false });
+        continue;
+      }
+      const previous = tokens[tokens.length - 1];
+      if (leadingPunctuation.test(piece) && previous && previous.text !== ' ') {
+        previous.text += piece;
+        continue;
+      }
+      tokens.push({ text: piece, highlighted: segment.highlighted });
+    }
+  }
+  // 공백이 겹치지 않게 정리
+  return tokens.filter((token, index) => !(token.text === ' ' && tokens[index - 1]?.text === ' '));
+}
+
 export function stripMarks(input: string): string {
   return input.replace(/\*/g, '').replace(/\s+/g, ' ').trim();
 }

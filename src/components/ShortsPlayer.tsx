@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Shorts } from '../types';
 import { TEMPLATE_MAP, roleLabel } from '../lib/templates';
 import { cutStartTimes, formatClock, totalDuration } from '../lib/srt';
-import { parseHighlight, stripMarks } from '../lib/text';
+import { captionTokens, stripMarks } from '../lib/text';
 import { isTtsSupported, speak, stopSpeaking } from '../lib/tts';
 import { buildScenePlan } from '../lib/motion/scene';
 import { renderFrame } from '../lib/motion/draw';
+import { onArtLoaded, preloadArts } from '../lib/motion/artLoader';
 
 /**
  * 9:16 쇼츠 플레이어.
@@ -27,6 +28,7 @@ export function ShortsPlayer({
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [artVersion, setArtVersion] = useState(0);
   const [frameWidth, setFrameWidth] = useState(280);
   const frameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -82,10 +84,25 @@ export function ShortsPlayer({
     return () => observer.disconnect();
   }, [plan]);
 
+  // 일러스트가 도착하면 그 즉시 다시 그립니다(멈춰 있어도 그림이 나타나게)
+  useEffect(() => {
+    const off = onArtLoaded(() => setArtVersion((value) => value + 1));
+    void preloadArts(plan.cuts.map((cut) => cut.art.id));
+    return off;
+  }, [plan]);
+
   // 새 대본·새 시드가 오면 첫 프레임부터 다시
   useEffect(() => {
     paint();
-  }, [paint]);
+  }, [paint, artVersion]);
+
+  // 보고 있는 컷과 다음 컷 그림을 먼저 준비합니다.
+  useEffect(() => {
+    const ids = [plan.cuts[activeIndex]?.art.id, plan.cuts[activeIndex + 1]?.art.id].filter(
+      (id): id is string => Boolean(id),
+    );
+    if (ids.length) void preloadArts(ids);
+  }, [plan, activeIndex]);
 
   useEffect(() => {
     if (!playing) return;
@@ -201,7 +218,10 @@ export function ShortsPlayer({
         data-testid="shorts-frame"
         data-active-index={activeIndex}
         data-playing={playing ? 'true' : 'false'}
-        data-scene={scene?.world ?? ''}
+        data-scene={scene?.art.genre ?? ''}
+        data-art={scene?.art.id ?? ''}
+        data-art-title={scene?.art.title ?? ''}
+        data-art-shot={scene?.art.shot ?? ''}
         role="button"
         tabIndex={0}
         aria-label={playing ? '쇼츠 미리보기 멈추기' : '쇼츠 미리보기 재생'}
@@ -220,7 +240,9 @@ export function ShortsPlayer({
           ref={canvasRef}
           className="absolute inset-0 h-full w-full"
           data-testid="motion-canvas"
-          data-scene={scene?.world ?? ''}
+          data-scene={scene?.art.genre ?? ''}
+          data-art={scene?.art.id ?? ''}
+          data-art-title={scene?.art.title ?? ''}
           aria-hidden="true"
         />
 
@@ -262,7 +284,7 @@ export function ShortsPlayer({
         {cut ? (
           <div
             className="pointer-events-none absolute inset-x-0 z-20 flex justify-center px-[7%]"
-            style={{ bottom: `${Math.max(26, 148 * scale)}px` }}
+            style={{ bottom: `${Math.max(44, 198 * scale)}px` }}
           >
             <p
               key={`sub-${cut.id}`}
@@ -271,6 +293,8 @@ export function ShortsPlayer({
               style={{
                 fontSize: Math.max(15, 84 * scale),
                 lineHeight: 1.26,
+                textWrap: 'balance',
+                wordBreak: 'keep-all',
                 letterSpacing: '-0.01em',
                 color: '#ffffff',
                 WebkitTextStroke: `${stroke}px #000`,
@@ -278,22 +302,16 @@ export function ShortsPlayer({
                 textShadow: `${stroke * 0.6}px ${stroke * 0.9}px ${stroke * 1.6}px rgba(0,0,0,0.6)`,
               }}
             >
-              {parseHighlight(cut.subtitle).map((segment, index) =>
-                segment.highlighted ? (
-                  <span key={index} className="hl-pop inline-block" style={{ color: scene?.palette.accent ?? template.palette.accent }}>
-                    {segment.text}
-                  </span>
+              {captionTokens(cut.subtitle).map((token, index) =>
+                token.text === ' ' ? (
+                  ' '
                 ) : (
-                  <span key={index}>
-                    {segment.text.split(/(\s+)/).map((piece, pieceIndex) =>
-                      piece.trim() ? (
-                        <span key={pieceIndex} className="kin-word">
-                          {piece}
-                        </span>
-                      ) : (
-                        piece
-                      ),
-                    )}
+                  <span
+                    key={index}
+                    className={token.highlighted ? 'hl-pop inline-block' : 'kin-word'}
+                    style={token.highlighted ? { color: scene?.palette.accent ?? template.palette.accent } : undefined}
+                  >
+                    {token.text}
                   </span>
                 ),
               )}
@@ -365,7 +383,7 @@ export function ShortsPlayer({
         </div>
         {scene ? (
           <p className="mt-1.5 truncate text-[10px] text-zinc-600" data-testid="scene-label" title={scene.label}>
-            🎥 {scene.label}
+            🖼 {scene.label}
           </p>
         ) : null}
         {!isTtsSupported() ? (
