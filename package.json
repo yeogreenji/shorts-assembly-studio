@@ -1,9 +1,9 @@
 {
   "name": "shortcut-studio",
   "private": true,
-  "version": "2.0.0",
+  "version": "4.0.0",
   "type": "module",
-  "description": "주제 한 줄로 6컷 쇼츠 대본을 조립하고, 화면에서 바로 재생·수정·저장하는 9:16 쇼츠 스튜디오",
+  "description": "주제 한 줄로 컷마다 다른 모션 일러스트가 움직이는 6컷 쇼츠를 만들고, 영상(.webm)으로 저장하는 스튜디오",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

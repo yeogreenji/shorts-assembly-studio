@@ -17,12 +17,8 @@ export interface TemplateDef {
   palette: Palette;
   /** 칩을 누르면 채워지는 추천 주제 */
   topics: string[];
-  /** 결이 다른 장면 배경을 쓸 때 (public 기준 경로) */
-  scenes?: { hook: string; a: string; b: string; cta: string };
   cards: string[];
 }
-
-const scene = (path: string) => `${import.meta.env.BASE_URL}${path}`;
 
 export const TEMPLATES: TemplateDef[] = [
   {
@@ -33,12 +29,6 @@ export const TEMPLATES: TemplateDef[] = [
     banner: '직장인 밸런스',
     palette: { from: '#ff6b6b', to: '#5b21b6', accent: '#fde047' },
     topics: ['월급 1.5배 vs 칼퇴', '재택근무 vs 연봉 20% 인상', '점심 2시간 vs 칼퇴 30분'],
-    scenes: {
-      hook: scene('presets/balance-1/hook.jpg'),
-      a: scene('presets/balance-1/choice-a.jpg'),
-      b: scene('presets/balance-1/choice-b.jpg'),
-      cta: scene('presets/balance-1/cta.jpg'),
-    },
     cards: ['🥊', '💸', '😵', '🏃', '🫠', '💬'],
   },
   {

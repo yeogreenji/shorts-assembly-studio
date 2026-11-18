@@ -1,6 +1,7 @@
 import type { Shorts, Shot } from '../types';
 import { TONE_LABEL, TEMPLATE_MAP, cameraFor, roleLabel } from './templates';
 import { narrationOf, sceneNote } from './localEngine';
+import { buildScenePlan } from './motion/scene';
 import { stripMarks } from './text';
 
 function pad(value: number, size = 2): string {
@@ -78,11 +79,16 @@ export function buildGuide(shorts: Shorts): string {
     `톤: ${TONE_LABEL[shorts.tone]} · 총 ${totalDuration(shorts.cuts).toFixed(1)}초 · 9:16 세로`,
     '',
   ];
+  const plan = buildScenePlan(shorts);
   shorts.cuts.forEach((cut, index) => {
     const start = starts[index] ?? 0;
+    const scene = plan.cuts[index];
     lines.push(`${index + 1}. ${roleLabel(index, shorts.cuts.length)} · ${cut.duration.toFixed(1)}초 · ${start.toFixed(1)}s 시작`);
-    lines.push(`   화면: ${cut.emoji} ${sceneNote(shorts.template, index)}`);
-    lines.push(`   카메라: ${cameraFor(index)}`);
+    if (cut.visual) {
+      lines.push(`   장면: ${cut.visual.scene} · ${cut.visual.subject} / ${cut.visual.expression} 표정 · ${cut.visual.action} · 소품 ${cut.visual.props.join(', ') || '없음'}`);
+    }
+    lines.push(`   화면: ${cut.emoji} ${scene?.label ?? sceneNote(shorts.template, index)}`);
+    lines.push(`   카메라: ${cut.visual?.camera ?? cameraFor(index)} (${cameraFor(index)})`);
     lines.push(`   자막: ${stripMarks(cut.subtitle)}`);
     lines.push('');
   });

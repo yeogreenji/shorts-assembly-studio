@@ -3,7 +3,9 @@
 
 검사 범위
   · 첫 화면: 입력 1개 · 템플릿 4개 · 톤 3개 · 만들기 버튼 1개 (복잡한 패널 없음)
+  · 모션 일러스트: 캔버스가 실제로 그려지고 계속 움직임 · 컷마다 장면이 다름 · 새로 만들면 장면이 바뀜
   · 재생: 재생 버튼 → 컷이 실제로 넘어감(active index 증가) · 컷마다 한국어 음성 호출(ko-KR)
+  · 영상 저장: 움직이는 화면이 WebM으로 녹화되어 내려받아짐
   · 수정: 컷 자막 인라인 수정 반영 · 컷 순서 변경
   · 내보내기: 대본 복사(클립보드) · .srt 저장(6블록) · 컷별 가이드 저장
   · AI 서버: 상태 배지, AI 대본 적용, 응답 실패 시 내장 엔진 폴백
@@ -200,6 +202,61 @@ def run_offline(browser, base):
     check("첫 화면: 텍스트 탭·패널 전환 없음", page.locator("nav").count() == 0)
     check("첫 화면: 서버 없음 배지", "내장 대본 엔진" in page.inner_text('[data-testid="server-state"]'),
           page.inner_text('[data-testid="server-state"]'))
+    check("첫 화면: 정적 프리셋 이미지 없음", page.locator('img[src*="presets"]').count() == 0)
+
+    print("── 모션 일러스트 캔버스", flush=True)
+    check("모션 캔버스 1개", page.locator('[data-testid="motion-canvas"]').count() == 1)
+    painted = page.evaluate(
+        """() => {
+          const canvas = document.querySelector('[data-testid="motion-canvas"]');
+          if (!canvas) return { colors: 0, w: 0 };
+          const ctx = canvas.getContext('2d');
+          const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+          const seen = new Set();
+          for (let i = 0; i < data.length; i += 4 * 97) {
+            seen.add(`${data[i]},${data[i + 1]},${data[i + 2]}`);
+          }
+          return { colors: seen.size, w: canvas.width, h: canvas.height };
+        }"""
+    )
+    check("모션 캔버스: 여러 색으로 그려짐", painted.get("colors", 0) > 12, str(painted))
+    check("모션 캔버스: 9:16 픽셀", painted.get("h", 0) > painted.get("w", 0) * 1.7, str(painted))
+
+    page.click('[data-testid="play-toggle"]')
+    page.wait_for_timeout(320)
+    frame_a = page.locator('[data-testid="shorts-frame"]').screenshot()
+    page.wait_for_timeout(430)
+    frame_b = page.locator('[data-testid="shorts-frame"]').screenshot()
+    check("모션: 재생 중 화면이 계속 움직임", frame_a != frame_b, f"{len(frame_a)} / {len(frame_b)} bytes")
+    page.click('[data-testid="play-toggle"]')
+
+    scene_by_cut = []
+    for index in range(6):
+        page.click(f'[data-testid="shot-jump-{index}"]')
+        page.wait_for_timeout(260)
+        scene_by_cut.append(page.get_attribute('[data-testid="motion-canvas"]', "data-scene") or "")
+        page.click('[data-testid="play-toggle"]')
+    check("모션: 컷마다 장면이 다름", len(set(scene_by_cut)) >= 3, str(scene_by_cut))
+    check("모션: 장면 이름 표시", len(page.inner_text('[data-testid="scene-label"]')) > 4)
+
+    page.fill('[data-testid="topic-input"]', "월급 1.5배 vs 칼퇴")
+    page.click('[data-testid="generate"]')
+    page.wait_for_timeout(600)
+    first_scene = page.get_attribute('[data-testid="motion-canvas"]', "data-scene")
+    first_pixels = page.locator('[data-testid="shorts-frame"]').screenshot()
+    page.wait_for_timeout(300)
+    page.click('[data-testid="generate"]')
+    page.wait_for_timeout(600)
+    second_scene = page.get_attribute('[data-testid="motion-canvas"]', "data-scene")
+    second_pixels = page.locator('[data-testid="shorts-frame"]').screenshot()
+    check("모션: 다시 만들면 같은 주제도 다른 장면", first_pixels != second_pixels or first_scene != second_scene,
+          f"{first_scene} / {second_scene}")
+
+    # 이후 검사는 처음 상태(1번 컷)에서 이어 갑니다.
+    page.evaluate("localStorage.removeItem('shortcut-studio:shorts:v2')")
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_selector('[data-testid="shorts-frame"]')
+    page.wait_for_timeout(500)
 
     print("── 재생: 컷 전환 + 한국어 음성", flush=True)
     first_subtitle = shot_value(page, 0).replace("*", "")
@@ -277,6 +334,22 @@ def run_offline(browser, base):
     except Exception:  # noqa: BLE001
         guide_clip = ""
     check("가이드 복사: 컷별 안내", guide_clip.count("카메라:") == 6, guide_clip[:60])
+
+    print("── 영상 저장(WebM 녹화)", flush=True)
+    check("영상 저장 버튼", page.locator('[data-testid="export-video"]').count() == 1)
+    if page.locator('[data-testid="export-video"]').is_enabled():
+        try:
+            with page.expect_download(timeout=90000) as video_info:
+                page.click('[data-testid="export-video"]')
+            video_path = video_info.value.path()
+            video_size = os.path.getsize(video_path) if video_path else 0
+            check("영상 저장: 파일 생성", video_size > 50000, f"{video_size} bytes")
+            check("영상 저장: .webm 확장자", (video_info.value.suggested_filename or "").endswith(".webm"),
+                  video_info.value.suggested_filename)
+        except Exception as exc:  # noqa: BLE001
+            check("영상 저장: 녹화 완료", False, f"{type(exc).__name__}: {str(exc)[:120]}")
+    else:
+        check("영상 저장: 이 브라우저에서 지원", False, "button disabled")
 
     print("── 새 주제로 다시 만들기(내장 엔진)", flush=True)
     page.fill('[data-testid="topic-input"]', "자취 3년차가 아는 꿀팁")
@@ -380,6 +453,22 @@ def run_ai(browser, base, port):
     check("AI: JSON 응답 모드", captured.get("generationConfig", {}).get("responseMimeType") == "application/json")
     check("AI: 프롬프트에 주제 포함", "AI 테스트 주제" in captured.get("user", ""))
     check("AI: 시스템 프롬프트 적용", "SHORTCUT_SHORTS" in captured.get("system", ""))
+    check("AI: 프롬프트에 장면 지시 규칙", "visual" in captured.get("system", "") and '"scene"' in captured.get("system", ""))
+    check("AI: 프롬프트에 훅 공식", "0~2초" in captured.get("system", ""))
+
+    def scene_for(index):
+        page.click(f'[data-testid="shot-jump-{index}"]')
+        wait_until(lambda: active_index(page) == index, 4)
+        value = page.get_attribute('[data-testid="motion-canvas"]', "data-scene")
+        if is_playing(page):
+            page.click('[data-testid="play-toggle"]')
+        page.wait_for_timeout(150)
+        return value
+
+    scene_first = scene_for(0)
+    check("AI: 장면 지시가 그림에 반영", scene_first == "subway", scene_first or "")
+    scene_second = scene_for(1)
+    check("AI: 컷마다 다른 장면", scene_second == "office", scene_second or "")
 
     page.screenshot(path=os.path.join(SHOTS, "03-ai.png"), full_page=True)
 

@@ -1,7 +1,7 @@
-import type { Shorts, Shot, TemplateId, Tone } from '../types';
+import type { CutVisual, Shorts, Shot, TemplateId, Tone } from '../types';
 import { CUT_DURATIONS, TEMPLATE_MAP, roleOf } from './templates';
 import { clampText, stripMarks } from './text';
-import { newSeed } from './scenes';
+import { createRng, newSeed, type Rng } from './motion/rng';
 
 /**
  * AI 키가 없거나 서버에 닿지 않아도 바로 쓸 수 있는 내장 대본 엔진.
@@ -291,74 +291,74 @@ const ENTRIES: Record<TemplateId, Entry[]> = {
 const FALLBACK = {
   balance: {
     hook: {
-      cider: ['*{A}* vs *{B}*, 3초 안에 골라봐', '*{A}*냐 *{B}*냐, 고르면 후회각'],
-      empathy: ['*{A}*와 *{B}*, 솔직히 둘 다 끌리지?', '이거 고르는 데 *일주일* 걸렸어'],
-      humor: ['*{A}* vs *{B}*, 친구 사이 갈라놓는 질문', '*{A}* 고른 사람 *손*'],
+      cider: ['*{A}* vs *{B}*, 딱 하나만 고른다면?', '*{A}*이냐 *{B}*냐, 고르는 순간 끝'],
+      empathy: ['이거 진짜 고민되는데… *{A}* 아니면 *{B}*?', '*{A}*와 *{B}*, 솔직히 어느 쪽?'],
+      humor: ['*{A}* vs *{B}*, 고르면 인생 바뀜', '이거 고르고 *후회*하는 사람 많음'],
     },
     body: [
-      '*{A}* 고르면 첫 한 달은 천국',
-      '근데 석 달 뒤 *진짜 청구서*가 날아옴',
-      '*{B}* 고르면 처음엔 *손해* 같음',
-      '그런데 1년 뒤 웃는 쪽은 *따로* 있음',
+      '1번 *{A}*, 각오한 사람만',
+      '대신 *{A}*엔 대가가 붙음',
+      '2번 *{B}*, 이건 안전빵',
+      '결국 *{B}*도 공짜는 없음',
     ],
     cta: {
-      cider: ['나는 *{A}*. 반박하면 네 말이 맞음', '*1번* vs *2번*, 댓글로 싸우자'],
-      empathy: ['너라면 *어느 쪽*? 이유가 궁금해', '댓글에 *네 선택* 남겨줘'],
-      humor: ['*{B}* 고른 사람, 댓글로 *자수*하세요', '댓글 안 달면 *둘 다* 당첨'],
+      cider: ['*1번*? *2번*? 댓글로 골라줘', '당신 선택은? *댓글*로'],
+      empathy: ['당신은 *어느 쪽*? 댓글로 알려줘', '댓글에 *이유*까지 부탁해'],
+      humor: ['댓글 안 달면 *둘 다* 함', '*1번*이야 *2번*이야? 댓글로'],
     },
   },
   living: {
     hook: {
-      cider: ['*{topic}*, 아직도 이렇게 하세요?', '*{topic}* 하다가 *돈 새는* 구간'],
-      empathy: ['*{topic}*, 나만 어려운 줄 알았어', '*{topic}*, 처음엔 다 *삽질*해요'],
-      humor: ['*{topic}* 검색하다 여기까지 온 사람', '*{topic}*, 안 알려주던 *그것*'],
+      cider: ['*{topic}*, 이거 모르면 손해', '*{topic}* — 핵심만 뽑았습니다'],
+      empathy: ['*{topic}*, 저도 고민했어요', '*{topic}*, 처음이라면 특히'],
+      humor: ['*{topic}* 검색하다가 여기 옴', '*{topic}*, 3년차도 몰랐던 것'],
     },
     body: [
-      '다들 *{topic}* 이렇게 시작하다 후회함',
-      '문제는 *처음 10분*에서 갈림',
-      '돈은 *나중에* 써도 늦지 않음',
-      '이것만 지키면 *{topic}* 절반은 끝',
+      '전기요금은 *누진세* 구간부터 확인',
+      '여름엔 *에어컨*이 제습기보다 효율적',
+      '수납은 *바닥* 말고 *세로*',
+      '철제 선반 하나로 *수납* 두 배',
     ],
     cta: {
-      cider: ['*저장*해두면 두 번 안 찾음', '이거 몰랐으면 *저장* 먼저'],
-      empathy: ['나만 이런 줄 알았다면 *저장*', '다음엔 *덜 삽질*하길'],
-      humor: ['저장 안 하면 *또* 검색하러 옴', '스크랩 안 하면 *월세* 올라감'],
+      cider: ['*저장*해두면 두 번 안 찾음', '필요할 때 *꺼내* 쓰세요'],
+      empathy: ['하나씩 *해보세요*', '도움되면 *저장*해두세요'],
+      humor: ['저장 안 하면 *또* 검색함', '스크랩은 *자유*입니다'],
     },
   },
   love: {
     hook: {
-      cider: ['*{topic}*, 여기서 *대부분* 틀림', '*{topic}*, 이 한 끗 차이'],
-      empathy: ['*{topic}*, 머릿속이 *복잡*하지', '*{topic}*, 괜찮아 다들 그래'],
-      humor: ['*{topic}* 때문에 새벽 3시에 깸', '*{topic}*, 읽씹 *당한* 사람 모여'],
+      cider: ['*{topic}*, 이 한 줄이면 정리됨', '*{topic}* — 핵심만 말합니다'],
+      empathy: ['*{topic}*, 저도 비슷했어요', '*{topic}*, 마음이 복잡하지'],
+      humor: ['*{topic}* 검색한 사람 여기 모여', '*{topic}*, 나만 몰랐던 거'],
     },
     body: [
-      '상대는 *말*보다 타이밍을 기억함',
-      '답장이 늦는 건 *마음*이 아닐 수도',
-      '*비교*하는 순간 대화가 식음',
-      '서운함은 *그날 밤*에 말해야 안 커짐',
+      '*질문 하나*로 시작하면 대화가 열림',
+      '답장은 *속도*보다 *내용*',
+      '*비교*는 그 자리에서 금지',
+      '서운함은 *그때* 말하기',
     ],
     cta: {
-      cider: ['이거 *써먹고* 후기 남겨줘', '*저장*하고 다음 약속에 써봐'],
-      empathy: ['너무 *애쓰지* 않아도 돼, 진짜', '비슷한 일 있었다면 *댓글*로'],
-      humor: ['이거 보고 *뜨끔*한 사람 댓글', '*전 애인*한테 보내지 마세요'],
+      cider: ['*저장*해두고 쓰세요', '이거면 *절반*은 해결'],
+      empathy: ['너무 *애쓰지* 않아도 돼요', '편하게 *한 번* 해보세요'],
+      humor: ['저장 안 하면 *또* 고민함', '이거 보고 *반성*했습니다'],
     },
   },
   it: {
     hook: {
-      cider: ['*{topic}*, 모르면 *뒤처지는* 이유', '*{topic}*, 4컷이면 정리됨'],
-      empathy: ['*{topic}*, 어렵게 생각 안 해도 돼', '*{topic}*, 나도 처음엔 *멘붕*'],
-      humor: ['*{topic}* 아는 척하고 싶은 사람', '*{topic}*, 회의 때 *한 마디* 용'],
+      cider: ['*{topic}*, 이 네 줄이면 끝', '*{topic}* — 핵심만 정리'],
+      empathy: ['*{topic}*, 어렵지 않아요', '*{topic}*, 처음엔 다 그래요'],
+      humor: ['*{topic}* 검색만 하다 끝난 사람', '*{topic}*, 아는 척용으로 저장'],
     },
     body: [
-      '핵심은 *기능*이 아니라 *쓰는 순서*',
-      '처음엔 *작은 것* 하나만 시켜보기',
-      '결과는 *꼭* 내 눈으로 한 번 확인',
-      '개인정보는 *넣기 전*에 한 번 더',
+      '*초안* 시키고 내가 고치기',
+      '질문에 *조건*을 붙이기',
+      '*로그인* 없이 써보게',
+      '*개인정보* 수집은 최소로',
     ],
     cta: {
-      cider: ['*저장*해두면 바로 써먹음', '이 순서만 외워도 *반은* 성공'],
-      empathy: ['하나만 *오늘* 해보세요', '궁금한 건 *댓글*로 물어봐'],
-      humor: ['저장만 하고 *안* 쓰죠? 다 알아요', '회의에서 *아는 척*하세요'],
+      cider: ['*저장*해두면 바로 씀', '이 네 줄이면 *대화* 됨'],
+      empathy: ['하나씩 *익혀보세요*', '도구는 *쓰다 보면* 편해져요'],
+      humor: ['저장만 하고 *안* 쓰죠?', '이거 보고 *아는 척* 하세요'],
     },
   },
 } as const;
@@ -399,6 +399,104 @@ export interface BuildInput {
   tone: Tone;
 }
 
+/* ── 컷별 그림 지시(visual) ───────────────────────────────
+ * AI가 없어도 컷마다 다른 장소·표정·동작·카메라를 골라
+ * 모션 일러스트가 매번 새로 그려지게 합니다. */
+
+const SCENE_POOL: Record<TemplateId, string[]> = {
+  balance: ['사무실 책상 앞', '퇴근길 지하철', '노을 진 옥상', '회식 끝난 밤거리', '회의실 책상', '회사 탕비실'],
+  living: ['자취방 주방', '원룸 창가', '동네 카페 창가', '장 보러 간 마트', '이사 첫날 빈방', '원룸 수납장 앞'],
+  love: ['카페 창가 자리', '밤에 오가는 카톡', '비 오는 골목', '공원 벤치', '집 앞 편의점', '영화관 앞'],
+  it: ['모니터 앞 책상', '네온 빛 작업실', '출근길 지하철', '앱 화면 클로즈업', '늦은 밤 개발실', '발표 직전 회의실'],
+};
+
+const SUBJECT_POOL: Record<TemplateId, string[]> = {
+  balance: ['직장인', '사회초년생', '팀원'],
+  living: ['자취 3년차', '첫 자취러', '혼자 사는 직장인'],
+  love: ['썸 타는 사람', '연애 초보', '소개팅 당사자'],
+  it: ['기획자', '개발자', 'IT 종사자'],
+};
+
+const CAMERA_POOL: Record<Shot['role'], string[]> = {
+  hook: ['punch-in', 'push-in', 'shake', 'orbit'],
+  body: ['push-in', 'pan-left', 'pan-right', 'tilt-up', 'handheld'],
+  cta: ['zoom-out', 'pan-left', 'handheld', 'tilt-up'],
+};
+
+const MOOD_POOL: Record<Tone, string[]> = {
+  cider: ['tense', 'hype', 'bright', 'cold'],
+  empathy: ['warm', 'dreamy', 'gloomy', 'bright'],
+  humor: ['comic', 'hype', 'bright', 'tense'],
+};
+
+const VISUAL_RULES: { key: string; expression?: string; action?: string; props?: string[]; mood?: string; scene?: string }[] = [
+  { key: '월급', expression: '지친', action: '지폐를 든', props: ['지폐', '시계'], mood: 'tense', scene: '사무실 책상 앞' },
+  { key: '연봉', expression: '뿌듯한', action: '지폐를 든', props: ['지폐', '차트'], mood: 'bright' },
+  { key: '칼퇴', expression: '웃는', action: '엄지 척', props: ['시계'], mood: 'bright', scene: '퇴근길 지하철' },
+  { key: '야근', expression: '지친', action: '머리를 감싼', props: ['시계', '커피'], mood: 'gloomy', scene: '늦은 밤 사무실' },
+  { key: '재택', expression: '무표정', action: '노트북을 보는', props: ['노트북'], mood: 'cold', scene: '원룸 창가' },
+  { key: '자취', expression: '무표정', action: '손가락으로 짚는', props: ['화분', '커피'], mood: 'warm', scene: '자취방 주방' },
+  { key: '월세', expression: '지친', action: '지폐를 든', props: ['지폐'], mood: 'tense' },
+  { key: '고양이', expression: '웃는', action: '두 손을 벌린', props: ['고양이'], mood: 'warm' },
+  { key: '소개팅', expression: '놀란', action: '휴대폰을 보는', props: ['휴대폰', '커피'], mood: 'comic', scene: '카페 창가 자리' },
+  { key: '카톡', expression: '혼란스러운', action: '휴대폰을 보는', props: ['휴대폰'], mood: 'tense' },
+  { key: '연애', expression: '시무룩한', action: '팔짱 낀', props: ['하트'], mood: 'gloomy' },
+  { key: '썸', expression: '웃는', action: '두 손을 벌린', props: ['하트', '휴대폰'], mood: 'dreamy' },
+  { key: 'AI', expression: '무표정', action: '노트북을 보는', props: ['노트북'], mood: 'cold', scene: '네온 빛 작업실' },
+  { key: '앱', expression: '무표정', action: '손가락으로 짚는', props: ['노트북'], mood: 'cold' },
+  { key: '출시', expression: '뿌듯한', action: '주먹 쥔', props: ['차트', '노트북'], mood: 'hype' },
+  { key: '짜증', expression: '화난', action: '주먹 쥔', props: ['차트'], mood: 'tense' },
+  { key: '최악', expression: '화난', action: '팔짱 낀', props: ['시계'], mood: 'tense' },
+  { key: '돈', expression: '놀란', action: '지폐를 든', props: ['지폐'], mood: 'tense' },
+  { key: '시간', expression: '지친', action: '머리를 감싼', props: ['시계'], mood: 'tense' },
+  { key: '커피', expression: '무표정', action: '컵을 든', props: ['커피'], mood: 'warm', scene: '동네 카페 창가' },
+];
+
+const DEFAULT_PROPS: Record<TemplateId, string[]> = {
+  balance: ['지폐', '시계'],
+  living: ['화분', '커피'],
+  love: ['휴대폰', '하트'],
+  it: ['노트북', '차트'],
+};
+
+function pickVisual(
+  template: TemplateId,
+  tone: Tone,
+  subtitle: string,
+  topic: string,
+  role: Shot['role'],
+  rng: Rng,
+  used: Set<string>,
+): CutVisual {
+  const text = `${subtitle} ${topic}`;
+  const scenes = SCENE_POOL[template];
+  const subjects = SUBJECT_POOL[template];
+  const matched = VISUAL_RULES.filter((rule) => text.toLowerCase().includes(rule.key.toLowerCase()));
+  const rule = matched.length ? rng.pick(matched) : null;
+
+  const expressions = ['지친', '놀란', '무표정', '웃는', '비웃는', '혼란스러운'];
+  const actions = ['손가락으로 짚는', '휴대폰을 보는', '두 손을 벌린', '팔짱 낀'];
+  const expression =
+    rule?.expression ??
+    (role === 'cta' ? rng.pick(['웃는', '뿌듯한']) : role === 'hook' ? rng.pick(expressions) : rng.pick(['무표정', '지친', '비웃는']));
+  const action = rule?.action ?? rng.pick(role === 'cta' ? ['엄지 척', '두 손을 벌린', '주먹 쥔'] : actions);
+  const props = rule?.props ?? [rng.pick(DEFAULT_PROPS[template]), rng.pick(['시계', '화분', '커피', '휴대폰', '차트'])];
+
+  const fresh = scenes.filter((candidate) => !used.has(candidate));
+  const scene = rule?.scene && !used.has(rule.scene) ? rule.scene : rng.pick(fresh.length ? fresh : scenes);
+  used.add(scene);
+
+  return {
+    scene,
+    subject: rng.pick(subjects),
+    expression,
+    action,
+    camera: rng.pick(CAMERA_POOL[role]),
+    props: [...new Set(props)].slice(0, 3),
+    mood: rule?.mood ?? rng.pick(MOOD_POOL[tone]),
+  };
+}
+
 /** 주제 한 줄 → 6컷 쇼츠. 네트워크 없이 즉시 끝납니다. */
 export function buildLocalShorts(input: BuildInput): Shorts {
   const template = TEMPLATE_MAP[input.template];
@@ -406,6 +504,9 @@ export function buildLocalShorts(input: BuildInput): Shorts {
   const [a, b] = splitBalance(topic);
   const entry = findEntry(input.template, topic);
   const vars = { topic: clampText(topic, 24), a, b };
+  const seed = newSeed();
+  const rng = createRng(seed);
+  const usedScenes = new Set<string>();
 
   let lines: string[];
   let title: string;
@@ -419,13 +520,17 @@ export function buildLocalShorts(input: BuildInput): Shorts {
   }
 
   const stamp = Date.now().toString(36);
-  const cuts: Shot[] = lines.slice(0, 6).map((line, index) => ({
-    id: `cut-${stamp}-${index}`,
-    role: roleOf(index),
-    emoji: template.cards[index] ?? '✨',
-    subtitle: fill(line, vars),
-    duration: CUT_DURATIONS[index] ?? 3,
-  }));
+  const cuts: Shot[] = lines.slice(0, 6).map((line, index) => {
+    const subtitle = fill(line, vars);
+    return {
+      id: `cut-${stamp}-${index}`,
+      role: roleOf(index),
+      emoji: template.cards[index] ?? '✨',
+      subtitle,
+      duration: CUT_DURATIONS[index] ?? 3,
+      visual: pickVisual(input.template, input.tone, subtitle, topic, roleOf(index), rng, usedScenes),
+    };
+  });
 
   return {
     title,
@@ -434,9 +539,9 @@ export function buildLocalShorts(input: BuildInput): Shorts {
     tone: input.tone,
     banner: template.banner,
     cuts,
-    seed: newSeed(),
     source: 'local',
     updatedAt: Date.now(),
+    seed,
   };
 }
 

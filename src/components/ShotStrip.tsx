@@ -8,16 +8,12 @@ export function ShotStrip({
   onBlur,
   onMove,
   onJump,
-  onReroll,
-  onRerollAll,
 }: {
   shorts: Shorts;
   onChange: (id: string, subtitle: string) => void;
   onBlur: (id: string) => void;
   onMove: (id: string, direction: -1 | 1) => void;
   onJump: (index: number) => void;
-  onReroll: (id: string) => void;
-  onRerollAll: () => void;
 }) {
   const accent = TEMPLATE_MAP[shorts.template].palette.accent;
   const last = shorts.cuts.length - 1;
@@ -28,17 +24,7 @@ export function ShotStrip({
         <h2 id="cuts-heading" className="text-[14px] font-black text-white">
           컷 다듬기
         </h2>
-        <div className="flex items-center gap-2">
-          <p className="text-[10px] text-zinc-500">자막을 고치면 위 화면에 바로 반영됩니다 · *단어* 는 강조색</p>
-          <button
-            type="button"
-            onClick={onRerollAll}
-            data-testid="reroll-all"
-            className="rounded-md border border-white/10 px-2 py-1 text-[10px] font-bold text-zinc-300 transition hover:border-white/25 hover:text-white"
-          >
-            🎲 배경 전부 새로 그리기
-          </button>
-        </div>
+        <p className="text-[10px] text-zinc-500">자막을 고치면 위 화면에 바로 반영됩니다 · *단어* 는 강조색</p>
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -54,7 +40,6 @@ export function ShotStrip({
             onBlur={onBlur}
             onMove={onMove}
             onJump={onJump}
-            onReroll={onReroll}
           />
         ))}
       </div>
@@ -72,7 +57,6 @@ function ShotCard({
   onBlur,
   onMove,
   onJump,
-  onReroll,
 }: {
   cut: Shot;
   index: number;
@@ -83,7 +67,6 @@ function ShotCard({
   onBlur: (id: string) => void;
   onMove: (id: string, direction: -1 | 1) => void;
   onJump: (index: number) => void;
-  onReroll: (id: string) => void;
 }) {
   return (
     <div className="rounded-xl border border-white/[0.08] bg-white/[0.025] p-2.5" data-testid={`shot-card-${index}`}>
@@ -101,19 +84,6 @@ function ShotCard({
           {roleLabel(index, total)}
         </button>
         <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={() => {
-              onReroll(cut.id);
-              onJump(index);
-            }}
-            data-testid={`shot-reroll-${index}`}
-            title="이 컷 배경 다시 그리기"
-            aria-label={`${index + 1}번째 컷 배경 다시 그리기`}
-            className="rounded-md border border-white/10 px-1.5 py-0.5 text-[11px] text-zinc-400 transition hover:border-white/25 hover:text-white"
-          >
-            🎲
-          </button>
           <button
             type="button"
             onClick={() => onMove(cut.id, -1)}
@@ -152,7 +122,9 @@ function ShotCard({
           className="field flex-1 py-1.5 text-[13px]"
         />
       </div>
-      <p className="mt-1.5 text-[10px] text-zinc-600">{cut.duration.toFixed(1)}초 · 화면에 크게 뜨는 자막</p>
+      <p className="mt-1.5 truncate text-[10px] text-zinc-600" title={cut.visual?.scene}>
+        {cut.duration.toFixed(1)}초 · {cut.visual ? `${cut.visual.scene} · ${cut.visual.camera}` : '화면에 크게 뜨는 자막'}
+      </p>
     </div>
   );
 }

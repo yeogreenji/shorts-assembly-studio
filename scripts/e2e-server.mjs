@@ -30,12 +30,18 @@ const MIME = {
 };
 
 const AI_CUTS = [
-  { role: 'hook', emoji: '🧠', subtitle: 'AI가 쓴 *첫 컷* 훅입니다', duration: 2.8 },
-  { role: 'body', emoji: '🛠️', subtitle: '두 번째 컷은 *포인트* 하나', duration: 3 },
-  { role: 'body', emoji: '📌', subtitle: '세 번째 컷도 *짧게* 갑니다', duration: 3 },
-  { role: 'body', emoji: '🔁', subtitle: '네 번째 컷에서 *한 번* 비틀기', duration: 3 },
-  { role: 'body', emoji: '🎯', subtitle: '다섯 번째 컷은 *마무리* 준비', duration: 2.9 },
-  { role: 'cta', emoji: '💬', subtitle: '*댓글*로 알려줘요', duration: 3 },
+  { role: 'hook', emoji: '🧠', subtitle: 'AI가 쓴 *첫 컷* 훅입니다', duration: 2.8,
+    visual: { scene: '퇴근길 지하철', subject: '직장인', expression: '놀란', action: '휴대폰을 보는', camera: 'punch-in', props: ['휴대폰', '시계'], mood: 'tense' } },
+  { role: 'body', emoji: '🛠️', subtitle: '두 번째 컷은 *포인트* 하나', duration: 3,
+    visual: { scene: '사무실 책상 앞', subject: '직장인', expression: '무표정', action: '지폐를 든', camera: 'push-in', props: ['지폐'], mood: 'cold' } },
+  { role: 'body', emoji: '📌', subtitle: '세 번째 컷도 *짧게* 갑니다', duration: 3,
+    visual: { scene: '노을 진 옥상', subject: '직장인', expression: '웃는', action: '컵을 든', camera: 'pan-left', props: ['커피'], mood: 'warm' } },
+  { role: 'body', emoji: '🔁', subtitle: '네 번째 컷에서 *한 번* 비틀기', duration: 3,
+    visual: { scene: '동네 카페 창가', subject: '직장인', expression: '비웃는', action: '팔짱 낀', camera: 'handheld', props: ['커피'], mood: 'comic' } },
+  { role: 'body', emoji: '🎯', subtitle: '다섯 번째 컷은 *마무리* 준비', duration: 2.9,
+    visual: { scene: '자취방 주방', subject: '직장인', expression: '지친', action: '머리를 감싼', camera: 'tilt-up', props: ['화분'], mood: 'gloomy' } },
+  { role: 'cta', emoji: '💬', subtitle: '*댓글*로 알려줘요', duration: 3,
+    visual: { scene: '퇴근길 지하철', subject: '직장인', expression: '뿌듯한', action: '주먹 쥔', camera: 'zoom-out', props: ['휴대폰'], mood: 'hype' } },
 ];
 
 function jsonResponse(payload, status = 200) {

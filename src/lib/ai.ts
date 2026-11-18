@@ -1,7 +1,7 @@
-import type { Shorts, Shot, TemplateId, Tone } from '../types';
+import type { CutVisual, Shorts, Shot, TemplateId, Tone } from '../types';
 import { TEMPLATE_MAP, roleOf } from './templates';
 import { clampText, normalizeMarks } from './text';
-import { newSeed } from './scenes';
+import { newSeed } from './motion/rng';
 
 /**
  * api/generate.ts (Vercel Serverless Function)와 이야기하는 클라이언트.
@@ -66,18 +66,44 @@ interface AiCut {
   role?: string;
   emoji?: string;
   subtitle?: string;
-  scene?: string;
   duration?: number;
+  visual?: Record<string, unknown>;
 }
 
 interface AiPayload {
   ok?: boolean;
   title?: string;
   banner?: string;
-  character?: string;
   cuts?: AiCut[];
   model?: string;
   error?: { code?: string; message?: string };
+}
+
+const cleanText = (value: unknown, limit: number): string =>
+  typeof value === 'string' ? clampText(value.replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim(), limit) : '';
+
+/** AI가 준 장면 지시를 화면이 감당할 수 있는 형태로 다듬습니다. */
+function toVisual(raw: unknown): CutVisual | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const props = Array.isArray(record.props)
+    ? record.props.map((item) => cleanText(item, 12)).filter(Boolean).slice(0, 3)
+    : [];
+  const visual: CutVisual = {
+    scene: cleanText(record.scene, 24),
+    subject: cleanText(record.subject, 20),
+    expression: cleanText(record.expression, 12),
+    action: cleanText(record.action, 20),
+    camera: cleanText(record.camera, 16),
+    props,
+    mood: cleanText(record.mood, 12),
+  };
+  const palette = Array.isArray(record.palette)
+    ? record.palette.map((item) => cleanText(item, 9)).filter((item) => /^#[0-9a-f]{6}$/i.test(item)).slice(0, 3)
+    : [];
+  if (palette.length) visual.palette = palette;
+  if (!visual.scene && !visual.expression && !visual.action && !visual.props.length) return undefined;
+  return visual;
 }
 
 function toShots(cuts: AiCut[]): Shot[] | null {
@@ -94,15 +120,15 @@ function toShots(cuts: AiCut[]): Shot[] | null {
       role: roleOf(index),
       emoji: clampText(String(cut?.emoji ?? '').trim(), 4) || '✨',
       subtitle,
-      scene: clampText(String(cut?.scene ?? '').trim(), 260) || undefined,
       duration: Number.isFinite(duration) ? Math.min(3.6, Math.max(2.2, duration)) : 3,
+      visual: toVisual(cut?.visual),
     });
   }
   return shots;
 }
 
 /** 서버 AI에게 6컷 대본을 받아옵니다. 실패하면 예외를 던지고, 호출한 쪽이 내장 엔진으로 넘어갑니다. */
-export async function requestAiShorts(input: AiInput, timeoutMs = 30000): Promise<Shorts> {
+export async function requestAiShorts(input: AiInput, timeoutMs = 22000): Promise<Shorts> {
   const { controller, done } = withTimeout(timeoutMs);
   try {
     const response = await fetch(GENERATE_ENDPOINT, {
@@ -131,10 +157,9 @@ export async function requestAiShorts(input: AiInput, timeoutMs = 30000): Promis
       tone: input.tone,
       banner: clampText(String(payload?.banner ?? '').trim(), 16) || template.banner,
       cuts,
-      character: clampText(String(payload?.character ?? '').trim(), 200) || undefined,
-      seed: newSeed(),
       source: 'ai',
       updatedAt: Date.now(),
+      seed: newSeed(),
     };
   } finally {
     done();
