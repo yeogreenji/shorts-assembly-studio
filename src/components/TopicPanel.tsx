@@ -35,8 +35,8 @@ export function TopicPanel({ studio }: { studio: Studio }) {
         </span>
       </h1>
       <p className="mt-2 text-[12px] leading-relaxed text-zinc-400">
-        로판 드레스부터 오피스 로맨스, 비 오는 밤까지 — 컷마다 다른 일러스트에 켄 번즈 카메라·꽃잎·비·빛·자막이
-        붙어 진짜 AI 영상처럼 흐릅니다.
+        로판 드레스부터 오피스 로맨스, 비 오는 밤까지 — 일러스트 자체가 2.5D로 살아 숨 쉬고, 비트마다 카메라가
+        밀고 당깁니다. 컷 전환은 플래시·휩 팬·글리치로 휙 넘어갑니다.
       </p>
 
       {/* 이 스튜디오가 쓰는 아트 미리보기 */}

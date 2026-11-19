@@ -29,6 +29,7 @@ export type CameraMove =
   | 'push'
   | 'pull'
   | 'punch'
+  | 'whip'
   | 'drift'
   | 'tilt'
   | 'shake'
@@ -93,6 +94,7 @@ const CAMERA_WORDS: { move: CameraMove; words: string[] }[] = [
   { move: 'push', words: ['push', '줌인', 'zoom in', '다가', '클로즈'] },
   { move: 'pull', words: ['pull', '줌아웃', 'zoom out', '멀어', '와이드'] },
   { move: 'punch', words: ['punch', '펀치', '강조', '때리', '훅'] },
+  { move: 'whip', words: ['whip', '휩', '확', '빠르게', '휙'] },
   { move: 'drift', words: ['pan-left', 'pan-right', '패닝', '옆으로', '흐르'] },
   { move: 'tilt', words: ['tilt', '틸트', '위로', '아래로'] },
   { move: 'shake', words: ['shake', '흔들', '충격', '진동'] },
@@ -102,9 +104,9 @@ const CAMERA_WORDS: { move: CameraMove; words: string[] }[] = [
 ];
 
 const ROLE_CAMERAS: Record<Shot['role'], CameraMove[]> = {
-  hook: ['punch', 'push', 'shake', 'slide'],
-  body: ['push', 'drift', 'tilt', 'handheld', 'orbit'],
-  cta: ['pull', 'orbit', 'drift', 'push'],
+  hook: ['punch', 'whip', 'slide', 'shake', 'push'],
+  body: ['push', 'drift', 'tilt', 'handheld', 'orbit', 'whip'],
+  cta: ['pull', 'orbit', 'push', 'drift'],
 };
 
 const ROLE_EFFECTS: Record<Shot['role'], EffectId[]> = {
@@ -141,7 +143,8 @@ function cameraFor(role: Shot['role'], visualCamera: string, rng: Rng, index: nu
   const chosen = move ?? rng.pick(ROLE_CAMERAS[role]);
   return {
     move: chosen,
-    intensity: 0.7 + rng.range(0, 0.5) + (role === 'hook' ? 0.18 : 0),
+    // 컷마다 움직임의 세기를 다르게 — 같은 무빙이 반복되지 않게.
+    intensity: 0.82 + rng.range(0, 0.55) + (role === 'hook' ? 0.22 : 0),
     direction: (index % 2 === 0 ? 1 : -1) as 1 | -1,
   };
 }

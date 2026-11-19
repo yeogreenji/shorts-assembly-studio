@@ -220,6 +220,56 @@ def canvas_region_mean(page, x0=0.15, y0=0.12, x1=0.85, y1=0.57):
     )
 
 
+def render_at(page, at, level=None):
+    """같은 시각이면 항상 같은 프레임 — 결정적으로 한 장을 그립니다."""
+    if level:
+        page.evaluate(f"window.__shortcutRenderAt({at}, '{level}')")
+    else:
+        page.evaluate(f"window.__shortcutRenderAt({at})")
+    page.wait_for_timeout(70)
+
+
+def frame_probe(page):
+    return page.evaluate("({...window.__shortcutFrame})")
+
+
+def canvas_pixels(page):
+    return page.evaluate(
+        """() => {
+          const canvas = document.querySelector('[data-testid="motion-canvas"]');
+          const ctx = canvas.getContext('2d');
+          const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+          const out = [];
+          for (let i = 0; i < data.length; i += 4 * 29) out.push(data[i], data[i + 1], data[i + 2]);
+          return out;
+        }"""
+    )
+
+
+def pixel_diff(a, b):
+    n = min(len(a), len(b))
+    if n < 3:
+        return {"mean": 0.0, "pct": 0.0}
+    total = 0
+    changed = 0
+    for i in range(0, n, 3):
+        delta = abs(a[i] - b[i]) + abs(a[i + 1] - b[i + 1]) + abs(a[i + 2] - b[i + 2])
+        total += delta
+        if delta > 14:
+            changed += 1
+    return {"mean": round(total / (n / 3) / 3, 2), "pct": round(100 * changed / (n / 3), 1)}
+
+
+def bright_ratio(path, top, bottom):
+    """영상 프레임의 일정 영역에서 아주 밝은(자막·배너) 픽셀 비율."""
+    image = Image.open(path).convert("RGB")
+    width, height = image.size
+    crop = image.crop((0, int(height * top), width, int(height * bottom)))
+    pixels = list(crop.getdata())
+    bright = sum(1 for r, g, b in pixels if min(r, g, b) > 232)
+    return bright / max(1, len(pixels))
+
+
 def image_region_mean(path, x0=0.15, y0=0.12, x1=0.85, y1=0.57):
     image = Image.open(path).convert("RGB")
     width, height = image.size
@@ -315,6 +365,53 @@ def run_offline(browser, base):
     frame_b = page.locator('[data-testid="shorts-frame"]').screenshot()
     check("모션: 재생 중 화면이 계속 움직임", frame_a != frame_b, f"{len(frame_a)} / {len(frame_b)} bytes")
     page.click('[data-testid="play-toggle"]')
+    if is_playing(page):
+        page.click('[data-testid="play-toggle"]')
+
+    print("── 모션 엔진: 카메라·그림 변위·자막", flush=True)
+    render_at(page, 0.2)
+    early = frame_probe(page)
+    pixels_early = canvas_pixels(page)
+    page.locator('[data-testid="shorts-frame"]').screenshot(path=os.path.join(ROOT, "scripts/.build/motion-a.png"))
+    render_at(page, 1.7)
+    late = frame_probe(page)
+    pixels_late = canvas_pixels(page)
+    page.locator('[data-testid="shorts-frame"]').screenshot(path=os.path.join(ROOT, "scripts/.build/motion-b.png"))
+    check("모션: 카메라가 컷 안에서 계속 움직임(줌 0.03 이상 변화)",
+          abs(late["zoom"] - early["zoom"]) > 0.03, f"zoom {early['zoom']:.2f} → {late['zoom']:.2f}")
+    check("모션: 그림 자체가 일러스트 안에서 움직임(변위 1.5px 이상)",
+          max(early.get("warp", 0), late.get("warp", 0)) > 1.5,
+          f"warp {early.get('warp'):.1f} / {late.get('warp'):.1f}")
+    check("모션: 그림이 이동(화면 중심 이동 4px 이상)",
+          abs(late["x"] - early["x"]) + abs(late["y"] - early["y"]) > 4,
+          f"({early['x']:.0f},{early['y']:.0f}) → ({late['x']:.0f},{late['y']:.0f})")
+    spread = pixel_diff(pixels_early, pixels_late)
+    check("모션: 두 시점 픽셀이 확실히 다름(정지 사진 아님)", spread["pct"] > 10, str(spread))
+    render_at(page, 1.7)
+    again = canvas_pixels(page)
+    check("모션: 같은 시각은 같은 프레임(결정적 렌더)", pixel_diff(pixels_late, again)["mean"] < 0.5, str(pixel_diff(pixels_late, again)))
+
+    # 모션 강도 3단계 — 화면에 바로 반영되고 저장됩니다
+    check("모션 강도 버튼 3개",
+          page.locator('[data-testid="motion-calm"], [data-testid="motion-vivid"], [data-testid="motion-boom"]').count() == 3)
+    check("모션 기본값: 생생", page.get_attribute('[data-testid="shorts-frame"]', "data-motion") == "vivid")
+    page.click('[data-testid="motion-boom"]')
+    check("모션 강도: 폭발 선택", wait_until(lambda: page.get_attribute('[data-testid="shorts-frame"]', "data-motion") == "boom", 2))
+    levels = {"boom": [], "calm": []}
+    for level in ("boom", "calm"):
+        for at in (0.4, 0.9, 1.6, 2.3):
+            render_at(page, at, level)
+            levels[level].append(frame_probe(page))
+    boom_zoom = sum(item["zoom"] for item in levels["boom"]) / 4
+    calm_zoom = sum(item["zoom"] for item in levels["calm"]) / 4
+    boom_warp = sum(item["warp"] for item in levels["boom"]) / 4
+    calm_warp = sum(item["warp"] for item in levels["calm"]) / 4
+    check("모션 강도: 폭발이 차분보다 크게 움직임",
+          boom_warp > calm_warp * 1.25 and boom_zoom >= calm_zoom - 0.01,
+          f"zoom boom={boom_zoom:.2f}/calm={calm_zoom:.2f} warp boom={boom_warp:.1f}/calm={calm_warp:.1f}")
+    check("모션 강도: 저장됨", page.evaluate("localStorage.getItem('shortcut-studio:motion:v1')") == "boom")
+    page.click('[data-testid="motion-vivid"]')
+    check("모션 강도: 생생으로 복귀", wait_until(lambda: page.get_attribute('[data-testid="shorts-frame"]', "data-motion") == "vivid", 2))
 
     print("── 컷마다 다른 일러스트", flush=True)
     ids_by_cut = []
@@ -334,12 +431,24 @@ def run_offline(browser, base):
         ok, detail = art_matches_canvas(page, ids_by_cut[index])
         check(f"{index + 1}번 컷: {ids_by_cut[index]} 그려짐", ok, detail)
     check("일러스트: 장면 이름 표시", len(page.inner_text('[data-testid="scene-label"]')) > 4)
+    # 문서용 컷 이미지 — 재생 버튼 오버레이를 잠깐 숨기고, 자막이 다 뜬 시점으로 그립니다.
+    page.add_style_tag(content=".pause-overlay{display:none !important}")
+    timings = page.evaluate(
+        "JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').cuts.map(c=>c.duration)"
+    ) or [2.8, 3, 3, 3, 2.9, 3]
+    starts_at = []
+    acc = 0
+    for duration in timings:
+        starts_at.append(acc)
+        acc += duration
     for index in range(6):
         page.click(f'[data-testid="shot-jump-{index}"]')
-        page.wait_for_timeout(650)
+        # 컷 이동은 자동 재생을 시작하므로, 재생이 실제로 시작된 걸 확인하고 멈춥니다.
+        wait_until(lambda: is_playing(page), 2)
+        page.click('[data-testid="play-toggle"]')
+        wait_until(lambda: not is_playing(page), 2)
+        render_at(page, starts_at[index] + timings[index] * 0.72)
         page.locator('[data-testid="shorts-frame"]').screenshot(path=os.path.join(SHOTS, f"cut-{index + 1}.png"))
-        if is_playing(page):
-            page.click('[data-testid="play-toggle"]')
     compose_cuts()
 
     page.fill('[data-testid="topic-input"]', "월급 1.5배 vs 칼퇴")
@@ -474,6 +583,28 @@ def run_offline(browser, base):
                     check("영상 저장: 녹화된 그림이 그 일러스트", gap < 62, f"{video_art} gap={round(gap)}")
                     frame.save(os.path.join(SHOTS, "05-video-frame.png"))
                     os.remove(frame_path)
+
+                # 움직임이 영상에도 그대로 구워졌는지 — 0.7초와 1.7초 프레임 비교
+                later_path = os.path.join(ROOT, "scripts/.build/video-frame-later.png")
+                subprocess.run(
+                    [FFMPEG, "-y", "-ss", "1.7", "-i", video_path, "-frames:v", "1", later_path],
+                    capture_output=True,
+                )
+                if os.path.exists(later_path):
+                    first = Image.open(os.path.join(SHOTS, "05-video-frame.png")).convert("RGB").resize((54, 96))
+                    later = Image.open(later_path).convert("RGB").resize((54, 96))
+                    delta = ImageChops.difference(first, later)
+                    moved = sum(ImageStat.Stat(delta).mean) / 3
+                    check("영상 저장: 시간에 따라 화면이 움직임(모션 구워짐)", moved > 2.5, f"mean diff={moved:.1f}")
+                    os.remove(later_path)
+
+                # 자막·배너도 영상 안에 (밝은 글자 픽셀)
+                check("영상 저장: 자막이 영상에 구워짐",
+                      bright_ratio(os.path.join(SHOTS, "05-video-frame.png"), 0.78, 0.95) > 0.004,
+                      f"bottom bright={bright_ratio(os.path.join(SHOTS, '05-video-frame.png'), 0.78, 0.95):.3f}")
+                check("영상 저장: 상단 배너·게이지가 구워짐",
+                      bright_ratio(os.path.join(SHOTS, "05-video-frame.png"), 0.0, 0.08) > 0.002,
+                      f"top bright={bright_ratio(os.path.join(SHOTS, '05-video-frame.png'), 0.0, 0.08):.3f}")
             else:
                 check("영상 저장: 프레임 추출", False, (ff.stderr or "")[-160:])
         except Exception as exc:  # noqa: BLE001
@@ -685,10 +816,10 @@ def main():
     only = sys.argv[1] if len(sys.argv) > 1 else "all"
     plans = [
         ("offline", "정적 호스팅(서버 없음)", lambda base: run_offline(browser_holder[0], base)),
-        ("ai", "AI 서버", lambda base: run_ai(browser_holder[0], base, 4185)),
-        ("nokey", "키 없는 서버", lambda base: run_nokey(browser_holder[0], base, 4186)),
+        ("ai", "AI 서버", lambda base: run_ai(browser_holder[0], base, 4188)),
+        ("nokey", "키 없는 서버", lambda base: run_nokey(browser_holder[0], base, 4189)),
     ]
-    ports = {"offline": 4183, "ai": 4185, "nokey": 4186}
+    ports = {"offline": 4187, "ai": 4188, "nokey": 4189}
     browser_holder = [None]
     with sync_playwright() as p:
         browser_holder[0] = launch_browser(p)

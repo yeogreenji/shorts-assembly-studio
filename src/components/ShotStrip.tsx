@@ -8,6 +8,7 @@ const MOVE_LABEL: Record<CameraMove, string> = {
   push: '줌인',
   pull: '줌아웃',
   punch: '펀치인',
+  whip: '휩 팬',
   drift: '패닝',
   tilt: '틸트',
   shake: '셰이크',

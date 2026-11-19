@@ -7,6 +7,7 @@ import { probeGenerateServer, requestAiShorts, type ServerState } from '../lib/a
 import { loadShorts, saveShorts } from '../lib/storage';
 import { normalizeMarks } from '../lib/text';
 import { newSeed } from '../lib/motion/rng';
+import type { MotionLevel } from '../lib/motion/stage';
 
 export interface Toast {
   id: number;
@@ -15,6 +16,24 @@ export interface Toast {
 }
 
 const SAMPLE = { topic: '월급 1.5배 vs 칼퇴', template: 'balance' as TemplateId, tone: 'cider' as Tone };
+const MOTION_KEY = 'shortcut-studio:motion:v1';
+const MOTION_IDS: MotionLevel[] = ['calm', 'vivid', 'boom'];
+
+function loadMotion(): MotionLevel {
+  try {
+    const raw = localStorage.getItem(MOTION_KEY);
+    if (raw && MOTION_IDS.includes(raw as MotionLevel)) return raw as MotionLevel;
+  } catch {
+    /* 저장소를 쓸 수 없는 브라우저 */
+  }
+  // 움직임을 줄여 달라고 한 기기(접근성 설정)에서는 처음부터 차분하게.
+  try {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'calm';
+  } catch {
+    /* matchMedia 없음 */
+  }
+  return 'vivid';
+}
 
 export function useShorts() {
   const initial = useMemo(() => loadShorts(), []);
@@ -25,12 +44,22 @@ export function useShorts() {
   const [server, setServer] = useState<ServerState>({ state: 'checking' });
   const [generating, setGenerating] = useState(false);
   const [playNonce, setPlayNonce] = useState(0);
+  const [motion, setMotionState] = useState<MotionLevel>(() => loadMotion());
   const [seekRequest, setSeekRequest] = useState<{ index: number; nonce: number } | null>(null);
   const [saved, setSaved] = useState(true);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastSeq = useRef(0);
   const seekSeq = useRef(0);
   const busy = useRef(false);
+
+  const setMotion = useCallback((level: MotionLevel) => {
+    setMotionState(level);
+    try {
+      localStorage.setItem(MOTION_KEY, level);
+    } catch {
+      /* 저장소를 쓸 수 없는 브라우저 */
+    }
+  }, []);
 
   const notify = useCallback((message: string, tone2: Toast['tone'] = 'info') => {
     toastSeq.current += 1;
@@ -152,6 +181,8 @@ export function useShorts() {
     selectTemplate,
     shorts,
     totalSeconds,
+    motion,
+    setMotion,
     server,
     generating,
     generate,

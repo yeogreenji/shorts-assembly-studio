@@ -1,6 +1,7 @@
 import type { ScenePlan } from './scene';
 import { renderFrame } from './draw';
 import { preloadArts } from './artLoader';
+import type { MotionLevel } from './stage';
 
 /** 모션 일러스트를 그대로 WebM 영상으로 녹화합니다. (서버·유료 API 없이 브라우저만 사용) */
 
@@ -11,6 +12,8 @@ export interface VideoExportOptions {
   width?: number;
   height?: number;
   fps?: number;
+  /** 미리보기와 같은 모션 강도 — 녹화 결과가 화면과 100% 같아집니다. */
+  motion?: MotionLevel | number;
 }
 
 export interface VideoExportResult {
@@ -184,7 +187,7 @@ export async function exportVideo(plan: ScenePlan, options: VideoExportOptions =
     recorder.onerror = () => reject(new Error('영상 녹화 중 오류가 났습니다.'));
   });
 
-  renderFrame(canvas, plan, 0, { captions: true, hud: true });
+  renderFrame(canvas, plan, 0, { captions: true, hud: true, motion: options.motion });
   videoTrack?.requestFrame?.();
   recorder.start(250);
   const startedAt = performance.now();
@@ -193,7 +196,7 @@ export async function exportVideo(plan: ScenePlan, options: VideoExportOptions =
     const loop = () => {
       const elapsed = (performance.now() - startedAt) / 1000;
       const at = Math.min(total, elapsed);
-      renderFrame(canvas, plan, at, { captions: true, hud: true });
+      renderFrame(canvas, plan, at, { captions: true, hud: true, motion: options.motion });
       videoTrack?.requestFrame?.();
       options.onProgress?.(Math.min(1, elapsed / total));
       if (elapsed < total + 0.08) {

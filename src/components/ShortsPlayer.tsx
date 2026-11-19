@@ -1,27 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Shorts } from '../types';
-import { TEMPLATE_MAP, roleLabel } from '../lib/templates';
+import { roleLabel } from '../lib/templates';
 import { cutStartTimes, formatClock, totalDuration } from '../lib/srt';
 import { captionTokens, stripMarks } from '../lib/text';
 import { isTtsSupported, speak, stopSpeaking } from '../lib/tts';
 import { buildScenePlan } from '../lib/motion/scene';
 import { renderFrame } from '../lib/motion/draw';
+import { MOTION_LEVELS, type MotionLevel } from '../lib/motion/stage';
 import { onArtLoaded, preloadArts } from '../lib/motion/artLoader';
 
 /**
  * 9:16 쇼츠 플레이어.
- * 캔버스가 컷마다 다른 모션 일러스트를 그리고, 컷이 바뀔 때마다 한국어 음성으로 자막을 읽습니다.
+ * 캔버스 한 장에 그림·카메라 무빙·파티클·컷 전환·자막·HUD를 모두 그립니다.
+ * (영상 녹화도 같은 renderFrame을 쓰기 때문에 미리보기와 결과물이 똑같습니다)
  */
 export function ShortsPlayer({
   shorts,
   playNonce,
   seekRequest,
+  motion,
+  onMotion,
 }: {
   shorts: Shorts;
   playNonce: number;
   seekRequest: { index: number; nonce: number } | null;
+  motion: MotionLevel;
+  onMotion: (level: MotionLevel) => void;
 }) {
-  const template = TEMPLATE_MAP[shorts.template];
   const total = useMemo(() => totalDuration(shorts.cuts), [shorts.cuts]);
   const starts = useMemo(() => cutStartTimes(shorts.cuts), [shorts.cuts]);
   const plan = useMemo(() => buildScenePlan(shorts), [shorts]);
@@ -35,6 +40,15 @@ export function ShortsPlayer({
   const timeRef = useRef(0);
   const spokenRef = useRef(-1);
   const lastNonce = useRef(playNonce);
+  const playingRef = useRef(false);
+  const rafRef = useRef(0);
+  const uiClock = useRef(0);
+  /** 마지막으로 그린 시각 — 화면 크기가 바뀌어 다시 그릴 때 같은 프레임을 유지합니다. */
+  const lastPaintRef = useRef(0);
+  /** 미리보기 캔버스 해상도 — 기기 성능에 맞춰 자동으로 오르내립니다(녹화는 항상 720). */
+  const pixelRef = useRef(576);
+  const maxPixelRef = useRef(720);
+  const perfRef = useRef({ frames: 0, sum: 0 });
 
   const activeIndex = useMemo(() => {
     let index = 0;
@@ -45,8 +59,6 @@ export function ShortsPlayer({
   }, [starts, time, shorts.cuts.length]);
 
   const cut = shorts.cuts[activeIndex] ?? shorts.cuts[0];
-  const cutStart = starts[activeIndex] ?? 0;
-  const cutProgress = cut ? Math.min(1, Math.max(0, (time - cutStart) / cut.duration)) : 0;
   const scale = frameWidth / 1080;
   const atEnd = time >= total - 0.02;
   const scene = plan.cuts[activeIndex];
@@ -55,34 +67,43 @@ export function ShortsPlayer({
     (at?: number) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      renderFrame(canvas, plan, at ?? timeRef.current, { captions: false, hud: false });
+      const stamp = at ?? timeRef.current;
+      lastPaintRef.current = stamp;
+      // 미리보기도 영상과 같은 함수·같은 옵션 — 자막·HUD까지 캔버스에 굽습니다.
+      renderFrame(canvas, plan, stamp, { captions: true, hud: true, motion });
     },
-    [plan],
+    [plan, motion],
   );
 
-  // 화면 크기에 맞춰 캔버스 픽셀 크기 조절 (최대 720px 폭 — 선명도와 속도의 균형)
+  // 캔버스 픽셀 크기 — 화면 폭·DPR에 맞추되, 프레임이 무거우면 스스로 낮춥니다.
+  const sizeCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const pixelWidth = Math.max(240, Math.round(pixelRef.current));
+    const pixelHeight = Math.round((pixelWidth * 16) / 9);
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    paint(lastPaintRef.current);
+  }, [paint]);
+
   useEffect(() => {
     const node = frameRef.current;
     if (!node) return;
     const apply = () => {
       const width = node.clientWidth;
       setFrameWidth(width);
-      const canvas = canvasRef.current;
-      if (!canvas) return;
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      const pixelWidth = Math.min(720, Math.round(width * ratio));
-      const pixelHeight = Math.round((pixelWidth * 16) / 9);
-      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-        canvas.width = pixelWidth;
-        canvas.height = pixelHeight;
-      }
-      renderFrame(canvas, plan, timeRef.current, { captions: false, hud: false });
+      maxPixelRef.current = Math.min(720, Math.round(width * ratio));
+      pixelRef.current = Math.min(pixelRef.current, maxPixelRef.current);
+      sizeCanvas();
     };
     const observer = new ResizeObserver(apply);
     observer.observe(node);
     apply();
     return () => observer.disconnect();
-  }, [plan]);
+  }, [sizeCanvas]);
 
   // 일러스트가 도착하면 그 즉시 다시 그립니다(멈춰 있어도 그림이 나타나게)
   useEffect(() => {
@@ -91,10 +112,24 @@ export function ShortsPlayer({
     return off;
   }, [plan]);
 
-  // 새 대본·새 시드가 오면 첫 프레임부터 다시
   useEffect(() => {
     paint();
   }, [paint, artVersion]);
+
+  // 검증용: 시간을 지정해 한 프레임을 그대로 그려 봅니다(픽셀 비교에 씁니다).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    window.__shortcutRenderAt = (at: number, level?: MotionLevel) => {
+      const clamped = Math.max(0, Math.min(total, at));
+      lastPaintRef.current = clamped;
+      renderFrame(canvas, plan, clamped, { captions: true, hud: true, motion: level ?? motion });
+      return { at: clamped };
+    };
+    return () => {
+      delete window.__shortcutRenderAt;
+    };
+  }, [plan, total, motion]);
 
   // 보고 있는 컷과 다음 컷 그림을 먼저 준비합니다.
   useEffect(() => {
@@ -104,37 +139,58 @@ export function ShortsPlayer({
     if (ids.length) void preloadArts(ids);
   }, [plan, activeIndex]);
 
+  // 재생 루프 — 화면은 매 프레임(최대 60fps) 그리고, UI 숫자는 8fps로만 갱신합니다.
   useEffect(() => {
-    if (!playing) return;
-    let raf = 0;
+    playingRef.current = playing;
+    if (!playing) {
+      cancelAnimationFrame(rafRef.current);
+      return;
+    }
     let last = performance.now();
-    let lastPaint = 0;
+    uiClock.current = 0;
     const tick = (now: number) => {
-      const delta = (now - last) / 1000;
+      if (!playingRef.current) return;
+      const delta = Math.min(0.06, (now - last) / 1000);
       last = now;
       const next = Math.min(total, timeRef.current + delta);
       timeRef.current = next;
-      // 30fps로 그립니다 — 영상 느낌은 그대로면서 발열·배터리를 아낍니다.
-      if (now - lastPaint > 30) {
-        lastPaint = now;
-        paint(next);
+      paint(next);
+      // 15프레임마다 평균 프레임 시간을 보고 해상도를 한 단계 조절합니다(60fps 지향).
+      perfRef.current.frames += 1;
+      perfRef.current.sum += delta;
+      if (perfRef.current.frames >= 20) {
+        const average = perfRef.current.sum / perfRef.current.frames;
+        perfRef.current.frames = 0;
+        perfRef.current.sum = 0;
+        const before = pixelRef.current;
+        if (average > 0.026 && pixelRef.current > 288) {
+          pixelRef.current = Math.max(288, pixelRef.current - 96);
+        } else if (average < 0.0135 && pixelRef.current < maxPixelRef.current) {
+          pixelRef.current = Math.min(maxPixelRef.current, pixelRef.current + 48);
+        }
+        if (pixelRef.current !== before) {
+          const canvas = canvasRef.current;
+          if (canvas) {
+            canvas.width = Math.round(pixelRef.current);
+            canvas.height = Math.round((pixelRef.current * 16) / 9);
+          }
+        }
+      }
+      uiClock.current += delta;
+      if (uiClock.current > 0.12) {
+        uiClock.current = 0;
         setTime(next);
       }
       if (next >= total - 0.001) {
+        setTime(total);
         setPlaying(false);
         return;
       }
-      raf = requestAnimationFrame(tick);
+      rafRef.current = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
   }, [playing, total, paint]);
-
-  // 멈춰 있을 때: 컷 이동·자막 수정·크기 변경을 한 프레임으로 반영
-  useEffect(() => {
-    if (!playing) paint(time);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [time, playing]);
 
   // 컷이 바뀌면 그 컷의 자막을 한국어 음성으로 읽습니다.
   useEffect(() => {
@@ -151,6 +207,16 @@ export function ShortsPlayer({
   }, [playing]);
 
   useEffect(() => () => stopSpeaking(), []);
+
+  // 영상 녹화가 시작되면 미리보기는 잠시 멈춥니다 — 같은 캔버스를 두 번 그리지 않게.
+  useEffect(() => {
+    const onExport = () => {
+      setPlaying(false);
+      stopSpeaking();
+    };
+    window.addEventListener('shortcut:export', onExport);
+    return () => window.removeEventListener('shortcut:export', onExport);
+  }, []);
 
   // 새 쇼츠가 만들어지면 처음부터 자동 재생 (만들기 버튼 클릭 = 사용자 동작이라 소리도 허용됨)
   useEffect(() => {
@@ -209,8 +275,6 @@ export function ShortsPlayer({
     });
   }, []);
 
-  const stroke = Math.max(1.3, 5.4 * Math.max(0.6, scale * 3.2));
-
   return (
     <div className="flex w-full flex-col items-center">
       <div
@@ -222,6 +286,7 @@ export function ShortsPlayer({
         data-art={scene?.art.id ?? ''}
         data-art-title={scene?.art.title ?? ''}
         data-art-shot={scene?.art.shot ?? ''}
+        data-motion={motion}
         role="button"
         tabIndex={0}
         aria-label={playing ? '쇼츠 미리보기 멈추기' : '쇼츠 미리보기 재생'}
@@ -235,7 +300,7 @@ export function ShortsPlayer({
         className="relative shrink-0 cursor-pointer select-none overflow-hidden rounded-[26px] border border-white/12 bg-black shadow-[0_30px_80px_-30px_rgba(0,0,0,0.95)]"
         style={{ height: 'min(62vh, 560px)', aspectRatio: '9 / 16' }}
       >
-        {/* 모션 일러스트 — 컷마다 새로 그려지고 계속 움직입니다 */}
+        {/* 그림 + 카메라 무빙 + 파티클 + 컷 전환 + 자막 + HUD (영상과 같은 렌더러) */}
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full"
@@ -246,84 +311,31 @@ export function ShortsPlayer({
           aria-hidden="true"
         />
 
-        <div className="grain pointer-events-none absolute inset-0 opacity-[0.12]" />
-
-        {/* 상단: 컷 진행 막대 + 라벨 */}
-        <div className="absolute inset-x-0 top-0 z-20" style={{ padding: `${Math.max(8, 26 * scale)}px` }}>
-          <div className="flex gap-x-[3px]">
-            {shorts.cuts.map((item, index) => (
-              <div key={item.id} className="h-[4px] flex-1 overflow-hidden rounded-full bg-white/25">
-                <div
-                  className="h-full rounded-full transition-none"
-                  style={{
-                    width: index < activeIndex ? '100%' : index === activeIndex ? `${cutProgress * 100}%` : '0%',
-                    background: template.palette.accent,
-                  }}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <span
-              className="truncate rounded-full bg-black/45 px-2 py-[3px] font-bold text-white/90 backdrop-blur"
-              style={{ fontSize: Math.max(8, 30 * scale) }}
-            >
-              {shorts.banner || template.banner}
-            </span>
-            <span
-              className="rounded-full bg-black/45 px-2 py-[3px] font-mono text-white/70 backdrop-blur"
-              style={{ fontSize: Math.max(8, 28 * scale) }}
-              data-testid="cut-badge"
-            >
-              {activeIndex + 1}/{shorts.cuts.length}
-            </span>
-          </div>
-        </div>
-
-        {/* 자막 */}
+        {/* 자막은 캔버스에 구워집니다. 이 요소는 화면 낭독기·검증용 같은 글자입니다. */}
         {cut ? (
-          <div
-            className="pointer-events-none absolute inset-x-0 z-20 flex justify-center px-[7%]"
-            style={{ bottom: `${Math.max(44, 198 * scale)}px` }}
+          <p
+            key={`sub-${cut.id}`}
+            data-testid="player-subtitle"
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-[7%] text-center opacity-0"
+            aria-live="polite"
           >
-            <p
-              key={`sub-${cut.id}`}
-              data-testid="player-subtitle"
-              className="sub-pop text-center font-black"
-              style={{
-                fontSize: Math.max(15, 84 * scale),
-                lineHeight: 1.26,
-                textWrap: 'balance',
-                wordBreak: 'keep-all',
-                letterSpacing: '-0.01em',
-                color: '#ffffff',
-                WebkitTextStroke: `${stroke}px #000`,
-                paintOrder: 'stroke fill',
-                textShadow: `${stroke * 0.6}px ${stroke * 0.9}px ${stroke * 1.6}px rgba(0,0,0,0.6)`,
-              }}
-            >
-              {captionTokens(cut.subtitle).map((token, index) =>
-                token.text === ' ' ? (
-                  ' '
-                ) : (
-                  <span
-                    key={index}
-                    className={token.highlighted ? 'hl-pop inline-block' : 'kin-word'}
-                    style={token.highlighted ? { color: scene?.palette.accent ?? template.palette.accent } : undefined}
-                  >
-                    {token.text}
-                  </span>
-                ),
-              )}
-            </p>
-          </div>
+            {captionTokens(cut.subtitle).map((token, index) =>
+              token.text === ' ' ? (
+                ' '
+              ) : (
+                <span key={index} className={token.highlighted ? 'hl-pop inline-block' : 'kin-word inline-block'}>
+                  {token.text}
+                </span>
+              ),
+            )}
+          </p>
         ) : null}
 
         {/* 멈춤 / 다시 보기 */}
         {!playing ? (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-black/15">
+          <div className="pause-overlay absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-black/15">
             <span
-              className="flex items-center justify-center rounded-full bg-black/55 text-white shadow-2xl backdrop-blur"
+              className="flex items-center justify-center rounded-full bg-black/60 text-white shadow-2xl"
               style={{ width: Math.max(44, 132 * scale), height: Math.max(44, 132 * scale), fontSize: Math.max(16, 52 * scale) }}
             >
               {atEnd ? '↻' : '▶'}
@@ -373,6 +385,30 @@ export function ShortsPlayer({
             {muted ? '🔇' : '🔊'}
           </button>
         </div>
+
+        {/* 모션 강도 — 같은 6컷도 얼마나 격하게 움직일지 바로 바꿔 볼 수 있습니다 */}
+        <div className="mt-2 flex items-center gap-1 rounded-xl border border-white/[0.07] bg-black/25 p-1">
+          <span className="px-1.5 text-[10px] font-bold text-zinc-400">모션</span>
+          {MOTION_LEVELS.map((level) => (
+            <button
+              key={level.id}
+              type="button"
+              data-testid={`motion-${level.id}`}
+              onClick={() => onMotion(level.id)}
+              aria-pressed={motion === level.id}
+              title={level.hint}
+              className={`flex-1 rounded-lg px-1.5 py-1.5 text-[11px] font-bold transition ${
+                motion === level.id
+                  ? 'bg-brand-500/25 text-brand-100 shadow-[inset_0_0_0_1px_rgba(255,168,210,0.4)]'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              {level.id === 'calm' ? '🐢 ' : level.id === 'vivid' ? '⚡ ' : '🔥 '}
+              {level.label}
+            </button>
+          ))}
+        </div>
+
         <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-500">
           <span className="font-mono">
             {formatClock(time)} / {formatClock(total)}
@@ -392,7 +428,7 @@ export function ShortsPlayer({
           </p>
         ) : (
           <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
-            재생하면 컷마다 자막을 한국어 음성으로 읽어 줍니다. 브라우저 목소리라 설치할 것이 없습니다.
+            자막·배너·게이지까지 캔버스에 구워지므로, 저장한 영상이 지금 보이는 화면과 똑같습니다.
           </p>
         )}
       </div>

@@ -6,16 +6,19 @@ import { copyText, downloadBlob, downloadText } from '../lib/download';
 import { fileBase } from '../lib/storage';
 import { buildScenePlan } from '../lib/motion/scene';
 import { exportVideo, isVideoExportSupported } from '../lib/motion/record';
+import type { MotionLevel } from '../lib/motion/stage';
 
 /** 완성된 영상·대본·자막·컷별 가이드 — 원클릭 복사와 저장. */
 export function ExportBar({
   shorts,
   notify,
   vertical = false,
+  motion = 'vivid',
 }: {
   shorts: Shorts;
   notify: (message: string, tone?: Toast['tone']) => void;
   vertical?: boolean;
+  motion?: MotionLevel;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -35,10 +38,12 @@ export function ExportBar({
     setBusy('video');
     setProgress(0);
     try {
+      window.dispatchEvent(new Event('shortcut:export'));
       const plan = buildScenePlan(shorts);
       const result = await exportVideo(plan, {
         onProgress: setProgress,
         beat: true,
+        motion,
       });
       const extension = result.mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
       downloadBlob(`${base}.${extension}`, result.blob);
@@ -77,7 +82,7 @@ export function ExportBar({
       </button>
       <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
         {videoReady
-          ? '지금 보이는 모션 일러스트·자막이 그대로 9:16 영상으로 녹화됩니다(합성 비트 포함). 앞 2초만 확인하고 싶으면 미리보기에서 재생해 보세요.'
+          ? '지금 보이는 그림 움직임·자막·배너까지 그대로 9:16 영상으로 녹화됩니다(합성 비트 포함). 모션 강도도 미리보기와 같은 값으로 구워집니다.'
           : '영상 저장은 크롬·엣지에서 됩니다. 지금은 대본·자막·가이드로 꺼낼 수 있어요.'}
       </p>
 

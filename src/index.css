@@ -55,10 +55,9 @@ body::before {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.35;
+  opacity: 0.22;
   background-image: radial-gradient(rgba(255, 255, 255, 0.28) 0.5px, transparent 0.5px);
   background-size: 3px 3px;
-  mix-blend-mode: overlay;
 }
 
 #root {
@@ -94,7 +93,8 @@ body::before {
   box-shadow:
     0 30px 70px -46px rgba(0, 0, 0, 0.95),
     inset 0 1px 0 rgba(255, 255, 255, 0.055);
-  backdrop-filter: blur(14px);
+  /* 배경 블러(backdrop-filter)는 캔버스가 매 프레임 바뀔 때 화면 전체를 다시 흐리게 만들어
+     프레임을 절반으로 떨어뜨립니다. 패널은 이미 불투명 그라데이션이라 없어도 결이 같습니다. */
 }
 
 .field {

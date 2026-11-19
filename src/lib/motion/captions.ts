@@ -1,4 +1,5 @@
 import { rgba } from './color';
+import { captionTokens } from '../text';
 
 export interface CaptionWord {
   text: string;
@@ -7,24 +8,10 @@ export interface CaptionWord {
 
 /** *별표* 표시를 단어 단위로 나눠 강조 여부를 유지합니다. */
 export function splitWords(input: string): CaptionWord[] {
-  const words: CaptionWord[] = [];
-  const regex = /\*([^*]+)\*/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  const pushPlain = (text: string) => {
-    for (const piece of text.split(/\s+/)) {
-      if (piece) words.push({ text: piece, highlighted: false });
-    }
-  };
-  while ((match = regex.exec(input)) !== null) {
-    pushPlain(input.slice(last, match.index));
-    for (const piece of (match[1] ?? '').split(/\s+/)) {
-      if (piece) words.push({ text: piece, highlighted: true });
-    }
-    last = match.index + match[0].length;
-  }
-  pushPlain(input.slice(last));
-  return words;
+  // 화면과 같은 규칙으로 나눕니다 — 강조 단어 뒤의 쉼표·마침표가 따로 떨어지지 않게.
+  return captionTokens(input)
+    .filter((token) => token.text !== ' ')
+    .map((token) => ({ text: token.text, highlighted: token.highlighted }));
 }
 
 export function captionFont(size: number): string {
@@ -56,9 +43,15 @@ export function wrapWords(ctx: CanvasRenderingContext2D, words: CaptionWord[], m
   return { lines };
 }
 
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+/** 살짝 지나쳤다 돌아오는 팝 — 숏츠 자막의 '탁' 하고 박히는 느낌. */
+const backOut = (value: number) => 1 + 2.2 * (value - 1) ** 3 + 1.35 * (value - 1) ** 2;
+
 /**
- * 숏츠 자막을 캔버스에 굽습니다(내보낸 영상에도 그대로 남습니다).
- * 단어마다 살짝 늦게 튀어 오르는 애니메이션.
+ * 숏츠 자막 — 캔버스에 그대로 구워 미리보기와 내보낸 영상이 100% 같습니다.
+ *  · 단어마다 박자에 맞춰 톡톡 튀어 오르고
+ *  · *강조* 단어는 색 + 밑줄 + 발광 + 심장박동처럼 한 번 더 맥동
+ *  · 컷 시작에는 자막 전체가 "탁" 하고 박힘
  */
 export function drawCaption(
   ctx: CanvasRenderingContext2D,
@@ -70,12 +63,19 @@ export function drawCaption(
     centerX: number;
     bottom: number;
     elapsed: number;
+    /** 이 컷의 길이 — 단어 등장 박자를 여기에 맞춥니다. */
+    duration?: number;
+    /** 짧은 CTA 문장은 말풍선에 담습니다. */
+    bubble?: boolean;
     opacity?: number;
   },
 ): number {
   const words = splitWords(text);
   if (words.length === 0) return 0;
   const { accent, fontSize, maxWidth, centerX, bottom, elapsed } = options;
+  const duration = Math.max(0.6, options.duration ?? Math.max(2, words.length * 0.45));
+  const opacity = options.opacity ?? 1;
+
   ctx.save();
   ctx.font = captionFont(fontSize);
   ctx.textAlign = 'center';
@@ -85,34 +85,112 @@ export function drawCaption(
   const { lines } = wrapWords(ctx, words, maxWidth);
   const lineHeight = fontSize * 1.16;
   const totalHeight = lines.length * lineHeight;
-  const top = bottom - totalHeight;
+
+  const space = ctx.measureText(' ').width;
+  const lineWidths = lines.map((line) => {
+    const widths = line.map((word) => ctx.measureText(word.text).width);
+    return widths.reduce((sum, width) => sum + width, 0) + space * Math.max(0, line.length - 1);
+  });
+  const widest = Math.max(...lineWidths, 10);
+
+  // 컷 시작의 "탁" — 아주 짧게 크게 떴다가 제자리로.
+  const slam = 1 + 0.07 * Math.exp(-11 * Math.max(0, elapsed));
+  const slamDrop = 26 * Math.exp(-13 * Math.max(0, elapsed));
+
+  ctx.translate(centerX, bottom - totalHeight + slamDrop);
+  ctx.scale(slam, slam);
+  ctx.translate(-centerX, -(bottom - totalHeight));
+
+  // 말풍선(짧은 문장) — 자막 뒤에 둥근 판과 꼬리를 그립니다.
+  if (options.bubble) {
+    const padX = 52;
+    const padY = 36;
+    const bubbleW = Math.min(maxWidth + padX * 2, widest + padX * 2);
+    const bubbleH = totalHeight + padY * 2;
+    const bubbleTop = bottom - totalHeight - padY;
+    const pop = backOut(clamp01(elapsed / 0.36));
+    ctx.save();
+    ctx.globalAlpha = opacity * clamp01(elapsed / 0.16);
+    ctx.translate(centerX, bubbleTop + bubbleH / 2);
+    ctx.rotate(-0.012);
+    ctx.scale(0.78 + 0.22 * pop, 0.78 + 0.22 * pop);
+    ctx.translate(-centerX, -(bubbleTop + bubbleH / 2));
+    const radius = Math.min(54, bubbleH / 2);
+    // 그림자 + 몸통
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+    ctx.shadowBlur = 34;
+    ctx.shadowOffsetY = 12;
+    ctx.fillStyle = 'rgba(10, 9, 16, 0.68)';
+    ctx.beginPath();
+    ctx.roundRect(centerX - bubbleW / 2, bubbleTop, bubbleW, bubbleH, radius);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    // 꼬리 — 몸통과 같은 색으로 이어 붙입니다.
+    ctx.beginPath();
+    ctx.moveTo(centerX - 30, bubbleTop + bubbleH - 14);
+    ctx.quadraticCurveTo(centerX - 8, bubbleTop + bubbleH + 22, centerX + 16, bubbleTop + bubbleH + 34);
+    ctx.quadraticCurveTo(centerX + 12, bubbleTop + bubbleH + 10, centerX + 34, bubbleTop + bubbleH - 16);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = rgba(accent, 0.42);
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(centerX - bubbleW / 2, bubbleTop, bubbleW, bubbleH, radius);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  const revealSpan = Math.min(duration * 0.62, Math.max(0.45, duration * 0.5));
+  const step = words.length > 1 ? revealSpan / words.length : 0;
 
   let wordIndex = 0;
   lines.forEach((line, lineIndex) => {
     const widths = line.map((word) => ctx.measureText(word.text).width);
-    const space = ctx.measureText(' ').width;
-    const lineWidth = widths.reduce((sum, width) => sum + width, 0) + space * (line.length - 1);
-    let cursor = centerX - lineWidth / 2;
-    const y = top + lineIndex * lineHeight + lineHeight / 2;
+    let cursor = centerX - (lineWidths[lineIndex] ?? 0) / 2;
+    const y = bottom - totalHeight + lineIndex * lineHeight + lineHeight / 2;
     line.forEach((word, index) => {
       const width = widths[index] ?? 0;
-      const delay = wordIndex * 0.045;
-      const local = Math.max(0, Math.min(1, (elapsed - delay) / 0.3));
-      const eased = 1 - (1 - local) ** 3;
-      const scale = 0.86 + 0.14 * eased;
-      const offsetY = (1 - eased) * 26;
+      const delay = 0.05 + wordIndex * step;
+      const u = clamp01((elapsed - delay) / 0.3);
+      const pop = u <= 0 ? 0 : 0.72 + 0.28 * backOut(u);
+      const land = delay + 0.3;
+      const after = Math.max(0, elapsed - land);
+      const pulse = word.highlighted ? 1 + 0.05 * Math.sin(after * 13) * Math.exp(-after * 3.4) : 1;
+      const jitter = word.highlighted ? Math.sin(after * 38) * 2.4 * Math.exp(-after * 9) : 0;
+
       ctx.save();
-      ctx.globalAlpha = (options.opacity ?? 1) * eased;
-      ctx.translate(cursor + width / 2, y + offsetY);
-      ctx.scale(scale, scale);
+      ctx.globalAlpha = opacity * clamp01(u * 2.4);
+      ctx.translate(cursor + width / 2 + jitter, y + (1 - u) * 46);
+      ctx.scale(pop * pulse, pop * pulse);
       ctx.font = captionFont(fontSize);
       ctx.textAlign = 'center';
       ctx.lineWidth = Math.max(6, fontSize * 0.19);
       ctx.strokeStyle = 'rgba(6, 6, 10, 0.92)';
       ctx.strokeText(word.text, 0, 0);
+      if (word.highlighted) {
+        ctx.shadowColor = rgba(accent, 0.75);
+        ctx.shadowBlur = 24 + 14 * Math.sin(after * 9);
+      }
       ctx.fillStyle = word.highlighted ? accent : '#ffffff';
       ctx.fillText(word.text, 0, 0);
+      ctx.shadowColor = 'transparent';
       ctx.restore();
+
+      // 강조 단어 밑줄 — 박힌 뒤 왼쪽에서 오른쪽으로 그어집니다.
+      if (word.highlighted && after > 0) {
+        const grow = clamp01(after / 0.22);
+        const barW = width * 0.92 * (0.2 + 0.8 * grow);
+        const barY = y + fontSize * 0.56;
+        ctx.save();
+        ctx.globalAlpha = opacity * grow * 0.9;
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.roundRect(cursor + width / 2 - barW / 2, barY, barW, Math.max(5, fontSize * 0.08), 6);
+        ctx.fill();
+        ctx.restore();
+      }
       cursor += width + space;
       wordIndex += 1;
     });
@@ -121,7 +199,10 @@ export function drawCaption(
   return totalHeight;
 }
 
-/** 상단 라벨·컷 표시를 캔버스에 굽습니다. */
+/**
+ * 상단 후킹 배너·진행 게이지·컷 번호 — 캔버스에 구워 영상에도 그대로 남습니다.
+ * 배너는 살아 있는 듯 미세하게 맥동하고, 게이지 머리에는 빛이 붙습니다.
+ */
 export function drawHud(
   ctx: CanvasRenderingContext2D,
   options: {
@@ -131,48 +212,96 @@ export function drawHud(
     progress: number;
     accent: string;
     fontScale: number;
+    /** 컷이 시작된 뒤 흐른 시간 — 배너 맥동에 씁니다. */
+    elapsed?: number;
   },
 ): void {
   const { banner, index, count, progress, accent, fontScale } = options;
+  const elapsed = options.elapsed ?? 0;
   const pad = 26 * fontScale;
   const barTop = pad;
   const barWidth = 1080 - pad * 2;
   const gap = 8;
   const cell = (barWidth - gap * (count - 1)) / count;
+  const barH = 8 * fontScale;
+
   for (let cellIndex = 0; cellIndex < count; cellIndex += 1) {
     const x = pad + cellIndex * (cell + gap);
-    ctx.fillStyle = rgba('#ffffff', 0.28);
+    ctx.fillStyle = rgba('#ffffff', 0.26);
     ctx.beginPath();
-    ctx.roundRect(x, barTop, cell, 8 * fontScale, 4);
+    ctx.roundRect(x, barTop, cell, barH, barH / 2);
     ctx.fill();
-    if (cellIndex < index || cellIndex === index) {
-      const width = cellIndex < index ? cell : cell * Math.min(1, Math.max(0, progress));
+    if (cellIndex <= index) {
+      const filled = cellIndex < index ? 1 : clamp01(progress);
+      const width = Math.max(barH, cell * filled);
       ctx.fillStyle = accent;
       ctx.beginPath();
-      ctx.roundRect(x, barTop, Math.max(4, width), 8 * fontScale, 4);
+      ctx.roundRect(x, barTop, width, barH, barH / 2);
       ctx.fill();
+      if (cellIndex === index) {
+        // 게이지 머리의 빛
+        ctx.save();
+        ctx.shadowColor = accent;
+        ctx.shadowBlur = 18;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(x + width - barH / 2, barTop + barH / 2, barH * 0.62, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
   }
-  // 라벨
+
+  // 배너 — 살아 있는 듯 아주 느린 맥동 + 지나가는 빛
   ctx.save();
+  const pulse = 1 + 0.02 * Math.sin(elapsed * 5.2);
+  const text = banner || '';
   ctx.font = `800 ${30 * fontScale}px Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif`;
   ctx.textBaseline = 'middle';
-  const text = banner || '';
-  const width = Math.min(760, ctx.measureText(text).width + 34);
-  ctx.fillStyle = rgba('#000000', 0.45);
+  const chipW = Math.min(760, ctx.measureText(text).width + 38);
+  const chipH = 48 * fontScale;
+  const chipX = pad;
+  const chipY = barTop + 26 * fontScale;
+  ctx.translate(chipX, chipY + chipH / 2);
+  ctx.scale(pulse, pulse);
+  ctx.translate(-chipX, -(chipY + chipH / 2));
+  ctx.fillStyle = rgba('#000000', 0.46);
   ctx.beginPath();
-  ctx.roundRect(pad, barTop + 26 * fontScale, width, 48 * fontScale, 24 * fontScale);
+  ctx.roundRect(chipX, chipY, chipW, chipH, chipH / 2);
   ctx.fill();
-  ctx.fillStyle = rgba('#ffffff', 0.92);
+  ctx.strokeStyle = rgba(accent, 0.35 + 0.2 * Math.sin(elapsed * 5.2));
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(chipX, chipY, chipW, chipH, chipH / 2);
+  ctx.clip();
+  const sweepX = chipX - 160 + ((elapsed * 260) % (chipW + 320));
+  const sheen = ctx.createLinearGradient(sweepX, 0, sweepX + 160, 0);
+  sheen.addColorStop(0, rgba('#ffffff', 0));
+  sheen.addColorStop(0.5, rgba('#ffffff', 0.16));
+  sheen.addColorStop(1, rgba('#ffffff', 0));
+  ctx.fillStyle = sheen;
+  ctx.fillRect(chipX, chipY, chipW, chipH);
+  ctx.restore();
+  ctx.fillStyle = rgba('#ffffff', 0.94);
   ctx.textAlign = 'left';
-  ctx.fillText(text, pad + 17, barTop + 50 * fontScale);
+  ctx.fillText(text, chipX + 19, chipY + chipH / 2 + 1);
+  ctx.restore();
+
   // 컷 번호
+  ctx.save();
+  ctx.font = `800 ${28 * fontScale}px Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif`;
+  ctx.textBaseline = 'middle';
   ctx.textAlign = 'right';
-  ctx.fillStyle = rgba('#000000', 0.45);
+  const badgeW = 120;
+  const badgeH = 48 * fontScale;
+  const badgeX = 1080 - pad - badgeW;
+  ctx.fillStyle = rgba('#000000', 0.46);
   ctx.beginPath();
-  ctx.roundRect(1080 - pad - 120, barTop + 26 * fontScale, 120, 48 * fontScale, 24 * fontScale);
+  ctx.roundRect(badgeX, chipY, badgeW, badgeH, badgeH / 2);
   ctx.fill();
-  ctx.fillStyle = rgba('#ffffff', 0.8);
-  ctx.fillText(`${index + 1}/${count}`, 1080 - pad - 18, barTop + 50 * fontScale);
+  ctx.fillStyle = rgba('#ffffff', 0.82);
+  ctx.fillText(`${index + 1}/${count}`, badgeX + badgeW - 19, chipY + badgeH / 2 + 1);
   ctx.restore();
 }

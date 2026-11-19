@@ -33,10 +33,16 @@ export default function App() {
 
             <div className="mt-3 grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start sm:justify-center">
               <div className="flex justify-center">
-                <ShortsPlayer shorts={shorts} playNonce={studio.playNonce} seekRequest={studio.seekRequest} />
+                <ShortsPlayer
+                  shorts={shorts}
+                  playNonce={studio.playNonce}
+                  seekRequest={studio.seekRequest}
+                  motion={studio.motion}
+                  onMotion={studio.setMotion}
+                />
               </div>
               <div className="mx-auto w-full max-w-[360px] sm:mx-0 sm:max-w-none sm:pt-4">
-                <ExportBar shorts={shorts} notify={studio.notify} vertical />
+                <ExportBar shorts={shorts} notify={studio.notify} motion={studio.motion} vertical />
                 <div className="mt-3 rounded-2xl border border-white/[0.07] bg-black/25 p-3">
                   <p className="text-[10px] font-bold text-zinc-300">이 컷들의 아트</p>
                   <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
@@ -75,8 +81,9 @@ export default function App() {
         </div>
 
         <p className="mx-auto mt-4 max-w-2xl text-center text-[10px] leading-relaxed text-zinc-600">
-          그림은 웹툰·로맨스 판타지 스타일 일러스트 31장에서 컷마다 새로 배정됩니다. 대본은 AI가 없어도 내장 엔진으로
-          바로 나오고, 만든 영상은 720×1280 세로 영상으로 저장됩니다.
+          그림은 웹툰·로맨스 판타지 스타일 일러스트 31장에서 컷마다 새로 배정됩니다. 그림은 얼굴은 그대로 두고
+          머리카락·옷자락·배경이 미세하게 흔들리는 2.5D 워프로 움직이고, 자막·배너까지 캔버스에 구워지므로 저장한
+          720×1280 영상이 미리보기와 같습니다.
         </p>
       </main>
 
