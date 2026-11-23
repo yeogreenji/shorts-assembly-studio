@@ -30,7 +30,7 @@ const SERVICE = 'shortcut-generate';
 const VERSION = '1.0.0';
 const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
-const TEMPLATES = ['balance', 'living', 'love', 'it'] as const;
+const TEMPLATES = ['balance', 'living', 'love', 'review', 'it', 'issue'] as const;
 const TONES = ['cider', 'empathy', 'humor'] as const;
 const MAX_BODY_CHARS = 8_000;
 
@@ -106,6 +106,8 @@ const TEMPLATE_GUIDE: Record<Template, string> = {
   balance: 'A와 B 중 하나를 고르는 밸런스 게임. 1번(A)의 매력과 함정, 2번(B)의 매력과 함정을 번갈아 보여 주고 댓글 투표로 끝냅니다. 1컷은 "A vs B"를 그대로 살린 질문으로 씁니다.',
   living: '혼자 사는 사람에게 바로 쓸모 있는 생활 팁. 1컷은 흔한 실수나 돈 새는 지점을 찌르고, 팁 두 개를 이유와 함께 보여 준 뒤 저장을 유도합니다. 장소는 자취방·주방·마트처럼 구체적으로 잡습니다.',
   love: '연애·관계에서 실제로 겪는 장면. 1컷은 "이거 나 얘기인가" 싶은 한 장면이나 대사를 그대로, 2~5컷은 행동 팁 두 개와 흔한 실수, 6컷은 경험을 묻습니다. 카톡·카페·골목 같은 장면을 씁니다.',
+  review: '제품·맛집·서비스 솔직 후기. 1컷은 결론이나 가격·대기시간 같은 숫자로 시작하고, 2~5컷은 좋았던 점과 아쉬운 점을 번갈아, 6컷은 누구에게 추천하는지로 끝냅니다. 광고가 아니라 직접 써본 사람의 말투로 쓰고, 특정 상호·브랜드 이름은 쓰지 않습니다.',
+  issue: '60초 정보형 뉴스 요약. 1컷은 이번 주 가장 큰 변화 한 줄, 2~4컷은 이슈 세 가지를 하나씩(무슨 일·왜 중요한지), 5컷은 영향 받는 사람, 6컷은 한 줄 결론과 저장 유도. 사실만 단정하지 말고 보도된 내용 기준으로 쓰고, 확인되지 않은 수치·전망은 쓰지 않습니다.',
   it: '기술·서비스 이야기를 어렵지 않게. 1컷은 잘못 알고 있던 상식이나 손해 보는 습관을 찌르고, 쓸모 있는 포인트 두 개를 예시와 함께, 마지막에 저장을 유도합니다.',
 };
 

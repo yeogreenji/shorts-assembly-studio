@@ -1,7 +1,7 @@
 /**
  * E2E용 로컬 서버.
- *   node scripts/e2e-server.mjs ai 4185     → dist 정적 파일 + api/generate.ts (Gemini 응답은 스텁)
- *   node scripts/e2e-server.mjs nokey 4186  → 서버는 있지만 키 없음 (501 no_key)
+ *   node scripts/e2e-server.mjs ai 4185     → dist 정적 파일 + api/generate.ts (Gemini 응답은 스텁) + api/tts.ts (음성은 스텁)
+ *   node scripts/e2e-server.mjs nokey 4186  → 서버는 있지만 Gemini 키 없음 (501 no_key). 음성(TTS)은 키가 필요 없어 그대로 동작
  *   node scripts/e2e-server.mjs offline 4183→ 정적 파일만 (서버 없음 = GitHub Pages와 같은 상황)
  */
 import http from 'node:http';
@@ -49,6 +49,60 @@ function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
 }
 
+/**
+ * 음성 스텁 — 실제 Google TTS 대신 짧은 WAV를 돌려줍니다.
+ * (오디오 디코드·믹싱·덕킹 경로는 실제와 똑같이 지나갑니다)
+ */
+function stubSpeech(text) {
+  const seconds = Math.min(4, Math.max(0.6, text.length * 0.09));
+  const rate = 22050;
+  const frames = Math.floor(rate * seconds);
+  const data = Buffer.alloc(frames * 2);
+  const words = Math.max(1, text.split(/\s+/).length);
+  for (let i = 0; i < frames; i += 1) {
+    const t = i / rate;
+    const syllable = Math.sin(2 * Math.PI * 3.1 * t) > 0 ? 1 : 0.35;
+    const pace = 130 + ((i / frames) * words * 26) % 60;
+    const value = Math.sin(2 * Math.PI * pace * t) * 0.42 * syllable;
+    data.writeInt16LE(Math.max(-32767, Math.min(32767, Math.round(value * 32767))), i * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
+async function speechResponse(target) {
+  const url = new URL(String(target));
+  const text = url.searchParams.get('q') ?? '';
+  const total = Number(url.searchParams.get('total') ?? '1');
+  await mkdir(path.join(here, '.build'), { recursive: true });
+  const logPath = path.join(here, '.build', 'tts-request.json');
+  let log = { calls: [] };
+  try {
+    log = JSON.parse(await readFile(logPath, 'utf-8'));
+  } catch {
+    /* 첫 호출 */
+  }
+  log.calls.push({ text, total, lang: url.searchParams.get('tl') });
+  await writeFile(logPath, JSON.stringify(log, null, 2), 'utf-8');
+  if (!text.trim() || text.length > 200) {
+    return new Response('bad text', { status: 400 });
+  }
+  return new Response(stubSpeech(text), { status: 200, headers: { 'content-type': 'audio/wav' } });
+}
+
 /** Gemini 모의 응답 — 어떤 모델·설정으로 불렀는지 .build에 남깁니다. */
 async function geminiResponse(url, init = {}) {
   const target = String(url);
@@ -82,6 +136,8 @@ async function geminiResponse(url, init = {}) {
 
 async function boot() {
   let handler = null;
+  let ttsHandler = null;
+  const ttsOut = path.join(here, '.build', 'tts.mjs');
   if (mode !== 'offline') {
     const outfile = path.join(here, '.build', 'generate.mjs');
     await build({
@@ -94,9 +150,21 @@ async function boot() {
       logLevel: 'silent',
     });
 
+    await build({
+      entryPoints: [path.join(root, 'api/tts.ts')],
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'node20',
+      outfile: ttsOut,
+      logLevel: 'silent',
+    });
+
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, init = {}) => {
-      if (String(url).includes(':generateContent')) return geminiResponse(url, init);
+      const target = String(url);
+      if (target.includes(':generateContent')) return geminiResponse(url, init);
+      if (target.includes('translate_tts')) return speechResponse(target);
       return realFetch(url, init);
     };
 
@@ -110,6 +178,7 @@ async function boot() {
     delete process.env.GEMINI_MODEL;
     delete process.env.GEMINI_BASE_URL;
     handler = (await import(`${outfile}?ts=${Date.now()}`)).default;
+    ttsHandler = (await import(`${ttsOut}?ts=${Date.now()}`)).default;
   }
 
   const server = http.createServer(async (req, res) => {
@@ -122,6 +191,16 @@ async function boot() {
         return;
       }
       await handler(req, res);
+      return;
+    }
+    if (url.pathname === '/api/tts') {
+      if (!ttsHandler) {
+        res.statusCode = 404;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ ok: false, error: { code: 'server_unavailable' } }));
+        return;
+      }
+      await ttsHandler(req, res);
       return;
     }
     let filePath = path.join(dist, decodeURIComponent(url.pathname));

@@ -1,6 +1,7 @@
 import type { Shorts, TemplateId } from '../types';
 import { TEMPLATE_MAP, roleOf } from './templates';
 import { clampText } from './text';
+import { withDefaults } from './defaults';
 
 const KEY = 'shortcut-studio:shorts:v2';
 
@@ -14,16 +15,21 @@ function isShorts(value: unknown): value is Shorts {
   );
 }
 
+/** 저장된 프로젝트를 화면이 쓸 수 있는 형태로 다듬습니다(옛 버전 파일 포함). */
+export function normalizeShorts(value: unknown): Shorts | null {
+  if (!isShorts(value)) return null;
+  const parsed = value as Shorts;
+  return withDefaults({
+    ...parsed,
+    cuts: parsed.cuts.map((cut, index) => ({ ...cut, role: roleOf(index), id: cut.id || `cut-${index}` })),
+  });
+}
+
 export function loadShorts(): Shorts | null {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (!isShorts(parsed)) return null;
-    return {
-      ...parsed,
-      cuts: parsed.cuts.map((cut, index) => ({ ...cut, role: roleOf(index), id: cut.id || `cut-${index}` })),
-    };
+    return normalizeShorts(JSON.parse(raw) as unknown);
   } catch {
     return null;
   }

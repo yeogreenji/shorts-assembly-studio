@@ -1,89 +1,144 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useShorts } from './hooks/useShorts';
+import { useNarration } from './hooks/useNarration';
+import { usePlan, limitsOf } from './lib/plan';
 import { Header } from './components/Header';
 import { TopicPanel } from './components/TopicPanel';
+import { ProjectPanel } from './components/ProjectPanel';
 import { ShortsPlayer } from './components/ShortsPlayer';
 import { ShotStrip } from './components/ShotStrip';
-import { ExportBar } from './components/ExportBar';
+import { Inspector, type InspectorTab } from './components/Inspector';
+import { PricingDrawer } from './components/PricingDrawer';
+import { Icon } from './components/Icon';
 import { buildScenePlan } from './lib/motion/scene';
+import { hydrateImages } from './lib/customArt';
+import { previewVoice } from './lib/audio/previewVoice';
+import { loadClips } from './lib/audio/tts';
+
+type MobileView = 'script' | 'stage' | 'inspector';
 
 export default function App() {
   const studio = useShorts();
   const { shorts } = studio;
-  const plan = useMemo(() => buildScenePlan(shorts), [shorts]);
-  const genres = new Set(plan.cuts.map((cut) => cut.art.genre));
+  const plan = usePlan();
+  const limits = useMemo(() => limitsOf(plan), [plan]);
+  const narration = useNarration(shorts);
+  const scenePlan = useMemo(() => buildScenePlan(shorts), [shorts]);
+  const [tab, setTab] = useState<InspectorTab>('audio');
+  const [view, setView] = useState<MobileView>('stage');
+  const [pricingOpen, setPricingOpen] = useState(false);
+
+  // 저장해 둔 내 이미지를 캔버스 창고에 올립니다(새로고침해도 내 사진 컷이 그대로).
+  useEffect(() => {
+    hydrateImages();
+  }, []);
+
+  // 대본이 바뀌면 6컷 음성을 미리 받아 둡니다(플레이 전에 도착해 있게).
+  useEffect(() => {
+    if (!shorts.audio.narration) return;
+    void loadClips(narration.texts, narration.voice);
+  }, [narration.texts, narration.voice, shorts.audio.narration]);
+
+  // 음성이 서버에서 오지 못하면(정적 호스팅) 화면이 조용히 브라우저 음성으로 넘어가도록 한 번만 알립니다.
+  useEffect(() => {
+    if (narration.serverState === 'unavailable') {
+      studio.notify('이 주소에는 음성 서버가 없어 미리보기만 브라우저 음성으로 재생합니다.', 'info');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narration.serverState]);
 
   return (
-    <div className="min-h-dvh pb-8">
-      <Header saved={studio.saved} />
+    <div className="min-h-dvh">
+      <Header saved={studio.saved} plan={plan} server={studio.server} onPricing={() => setPricingOpen(true)} />
 
-      <main className="mx-auto w-full max-w-6xl px-3 pb-8 pt-3 sm:px-6 sm:pt-5">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,400px)_minmax(0,1fr)] lg:items-start lg:gap-5">
-          <TopicPanel studio={studio} />
+      <main className="mx-auto w-full max-w-[1560px] px-2.5 pb-8 pt-2.5 sm:px-4 sm:pt-4">
+        {/* 모바일 — 한 번에 한 패널 */}
+        <div className="seg mb-2.5 lg:hidden" role="group" aria-label="작업 영역">
+          {(
+            [
+              { id: 'script', label: '대본' },
+              { id: 'stage', label: '스테이지' },
+              { id: 'inspector', label: '설정' },
+            ] as { id: MobileView; label: string }[]
+          ).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              data-testid={`mobile-tab-${item.id}`}
+              className="seg-item"
+              data-active={view === item.id}
+              onClick={() => setView(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
 
-          <section className="panel p-3 sm:p-5" aria-labelledby="preview-heading">
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-1">
-              <h2 id="preview-heading" className="display text-[15px] font-extrabold text-white">
-                미리보기
-              </h2>
-              <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-[2px] text-[10px] text-zinc-400">
-                9:16 · {shorts.cuts.length}컷 · 약 {studio.totalSeconds.toFixed(1)}초
-              </span>
-            </div>
+        <div className="grid gap-2.5 lg:grid-cols-[minmax(260px,296px)_minmax(0,1fr)_minmax(300px,344px)] lg:items-start lg:gap-3">
+          {/* 왼쪽 — 대본·프리셋 */}
+          <div className={`${view === 'script' ? 'min-w-0 space-y-2.5' : 'hidden'} lg:block lg:space-y-3 lg:sticky lg:top-[68px] lg:max-h-[calc(100dvh-80px)] lg:overflow-y-auto lg:pr-0.5`}>
+            <TopicPanel studio={studio} />
+            <ProjectPanel studio={studio} />
+          </div>
 
-            <div className="mt-3 grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start sm:justify-center">
-              <div className="flex justify-center">
+          {/* 가운데 — 스테이지 + 컷 */}
+          <div className={`${view === 'stage' ? 'min-w-0 space-y-2.5' : 'hidden'} lg:block lg:space-y-3`}>
+            <section className="surface" aria-labelledby="stage-heading">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft px-3 py-2">
+                <h1 id="stage-heading" className="flex items-center gap-1.5 text-[12px] font-semibold text-mist-200">
+                  <Icon name="play" size={11} className="text-mist-500" />
+                  스테이지
+                </h1>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-mist-500" data-testid="project-summary">
+                    9:16 · {shorts.cuts.length}컷 · 약 {studio.totalSeconds.toFixed(1)}초
+                  </span>
+                </div>
+              </div>
+              <div className="flex justify-center px-2 py-3 sm:px-3">
                 <ShortsPlayer
                   shorts={shorts}
                   playNonce={studio.playNonce}
                   seekRequest={studio.seekRequest}
                   motion={studio.motion}
                   onMotion={studio.setMotion}
+                  onAudio={studio.setAudio}
+                  platformMark={limits.platformMark}
                 />
               </div>
-              <div className="mx-auto w-full max-w-[360px] sm:mx-0 sm:max-w-none sm:pt-4">
-                <ExportBar shorts={shorts} notify={studio.notify} motion={studio.motion} vertical />
-                <div className="mt-3 rounded-2xl border border-white/[0.07] bg-black/25 p-3">
-                  <p className="text-[10px] font-bold text-zinc-300">이 컷들의 아트</p>
-                  <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
-                    {plan.cuts
-                      .map((cut) => cut.art.title)
-                      .slice(0, 3)
-                      .join(' · ')}
-                    {plan.cuts.length > 3 ? ' …' : ''}
-                  </p>
-                  <p className="mt-1.5 text-[10px] text-zinc-600">
-                    장르 {genres.size}종 · 컷마다 다른 일러스트와 카메라 무빙
-                  </p>
-                </div>
-                <div className="mt-3 rounded-2xl border border-white/[0.07] bg-black/25 p-3">
-                  <p className="text-[10px] font-bold text-zinc-300">이렇게 씁니다</p>
-                  <ol className="mt-1.5 space-y-1 text-[10px] leading-relaxed text-zinc-500">
-                    <li>1. 주제를 한 줄 적고 톤을 고릅니다.</li>
-                    <li>2. 만들기를 누르면 웹툰 일러스트 6컷이 바로 재생됩니다.</li>
-                    <li>3. 마음에 안 드는 컷만 아래에서 고칩니다.</li>
-                    <li>4. 영상(.webm) 또는 대본으로 그대로 꺼냅니다.</li>
-                  </ol>
-                </div>
+              <div className="border-t border-line-soft px-3 py-2">
+                <p className="truncate text-[10px] text-mist-600">
+                  {scenePlan.cuts[0]?.art.title ?? '일러스트'} 외 {Math.max(0, scenePlan.cuts.length - 1)}컷 · 컷마다 다른
+                  일러스트와 카메라 무빙 · 자막·음성·브랜드가 영상에 그대로 구워집니다
+                </p>
               </div>
-            </div>
-          </section>
+            </section>
+
+            <ShotStrip
+              studio={studio}
+              narration={narration}
+              onVoice={(index) => void previewVoice(narration.texts[index] ?? '', { ...shorts.audio, voice: narration.voice })}
+            />
+          </div>
+
+          {/* 오른쪽 — 인스펙터 */}
+          <div className={`${view === 'inspector' ? 'min-w-0' : 'hidden'} lg:block lg:sticky lg:top-[68px] lg:max-h-[calc(100dvh-80px)] lg:overflow-y-auto lg:pr-0.5`}>
+            <Inspector
+              studio={studio}
+              narration={narration}
+              motion={studio.motion}
+              tab={tab}
+              onTab={setTab}
+              onPricing={() => setPricingOpen(true)}
+            />
+          </div>
         </div>
 
-        <div className="mt-3 sm:mt-5">
-          <ShotStrip
-            shorts={shorts}
-            onChange={studio.updateCut}
-            onBlur={studio.normalizeCut}
-            onMove={studio.moveCut}
-            onJump={studio.jumpTo}
-          />
-        </div>
-
-        <p className="mx-auto mt-4 max-w-2xl text-center text-[10px] leading-relaxed text-zinc-600">
-          그림은 웹툰·로맨스 판타지 스타일 일러스트 31장에서 컷마다 새로 배정됩니다. 그림은 얼굴은 그대로 두고
-          머리카락·옷자락·배경이 미세하게 흔들리는 2.5D 워프로 움직이고, 자막·배너까지 캔버스에 구워지므로 저장한
-          720×1280 영상이 미리보기와 같습니다.
+        <p className="mx-auto mt-4 max-w-3xl text-center text-[10px] leading-relaxed text-mist-600">
+          대본·이미지·영상은 브라우저 안에서만 처리되고 서버에 저장되지 않습니다(AI 대본을 켠 경우에만 주제 문장이,
+          나레이션을 켠 경우에만 컷 자막이 음성 생성을 위해 전달됩니다). 그림은 웹툰·로맨스 판타지 일러스트 31장에서
+          컷마다 새로 배정되고, 내 사진을 올린 컷은 얼굴은 그대로 두고 머리카락·옷자락·배경이 미세하게 흔들리는 2.5D
+          워프로 움직입니다.
         </p>
       </main>
 
@@ -92,18 +147,20 @@ export default function App() {
           <div
             key={toast.id}
             role="status"
-            className={`pointer-events-auto max-w-[92vw] rounded-xl border px-3 py-2 text-[11px] shadow-2xl backdrop-blur ${
+            className={`pointer-events-auto max-w-[92vw] rounded-[8px] border px-3 py-2 text-[11px] shadow-[0_18px_40px_-24px_rgba(0,0,0,0.9)] ${
               toast.tone === 'error'
-                ? 'border-red-400/30 bg-red-950/90 text-red-200'
+                ? 'border-red-500/30 bg-[#1b1114] text-red-200'
                 : toast.tone === 'warn'
-                  ? 'border-amber-400/30 bg-amber-950/90 text-amber-200'
-                  : 'border-white/15 bg-zinc-900/90 text-zinc-200'
+                  ? 'border-amber-500/25 bg-[#191510] text-amber-200'
+                  : 'border-line bg-ink-800 text-mist-200'
             }`}
           >
             {toast.message}
           </div>
         ))}
       </div>
+
+      {pricingOpen ? <PricingDrawer onClose={() => setPricingOpen(false)} /> : null}
     </div>
   );
 }

@@ -1,6 +1,7 @@
-import type { Shorts, Shot, TemplateId, Tone } from '../../types';
+import type { BrandSettings, CaptionStyle, Shorts, Shot, ShotImage, TemplateId, Tone } from '../../types';
 import { createRng, type Rng } from './rng';
 import { type ArtDef, type ArtExpression, type ArtShot, expressionFromWords, inferTopicGenre, pickArt } from './art';
+import { brandOf, styleOf } from '../defaults';
 
 /**
  * 대본 → 그림. 컷마다 웹툰·로판 일러스트 한 장을 고르고,
@@ -56,7 +57,7 @@ export interface CameraPlan {
 
 export interface CutScene {
   index: number;
-  /** 이 컷에 쓰이는 웹툰/로판 일러스트 */
+  /** 이 컷에 쓰이는 웹툰/로판 일러스트 (내 이미지를 올렸으면 그것) */
   art: ArtDef;
   framing: ArtShot;
   camera: CameraPlan;
@@ -69,6 +70,8 @@ export interface CutScene {
   label: string;
   /** 컷마다 다른 조명 세기 */
   light: number;
+  /** 사용자가 올린 내 이미지로 그리는 컷 */
+  custom: boolean;
 }
 
 export interface ScenePlan {
@@ -81,6 +84,10 @@ export interface ScenePlan {
   accent: string;
   template: TemplateId;
   tone: Tone;
+  /** 자막 테마·위치·크기 — 미리보기와 영상이 같은 값을 씁니다 */
+  style: CaptionStyle;
+  /** 브랜드 워터마크 */
+  brand: BrandSettings;
 }
 
 const SHOT_LABEL: Record<ArtShot, string> = {
@@ -205,6 +212,23 @@ function mergeEffects(base: EffectId[], extra: EffectId[], limit: number): Effec
   return [...new Set([...extra, ...base])].slice(0, limit);
 }
 
+/**
+ * 내 이미지는 일러스트와 같은 창고(artLoader)에 `img:` 접두사로 들어 있습니다.
+ * 장면 메타데이터(카메라·색·효과)는 원래 배정된 일러스트의 결을 그대로 이어받습니다.
+ */
+function customArtOf(base: ArtDef, image: ShotImage): ArtDef {
+  return {
+    ...base,
+    id: `img:${image.id}`,
+    file: '',
+    title: image.name || '내 이미지',
+    expression: 'neutral',
+    focus: { x: 0.5, y: 0.44 },
+    tags: [],
+    light: Math.max(0.75, base.light * 0.92),
+  };
+}
+
 export function buildScenePlan(shorts: Shorts): ScenePlan {
   const seed = shorts.seed ?? `${shorts.updatedAt}`;
   const usedIds = new Set<string>();
@@ -225,7 +249,7 @@ export function buildScenePlan(shorts: Shorts): ScenePlan {
     const expression = expressionFor(shot, shorts);
     const visualCamera = `${shot.visual?.camera ?? ''} ${shot.visual?.mood ?? ''}`;
 
-    const art = pickArt({
+    const picked = pickArt({
       scene,
       body,
       expression,
@@ -238,8 +262,12 @@ export function buildScenePlan(shorts: Shorts): ScenePlan {
       versus: versus && (shot.role === 'hook' || shot.role === 'cta' || index === 3),
       genreLock,
     });
-    usedIds.add(art.id);
-    previous = art;
+    usedIds.add(picked.id);
+    previous = picked;
+
+    // 이 컷에 내 이미지를 올렸으면 그림만 바꿔 끼웁니다(카메라·색·효과는 그대로).
+    const custom = Boolean(shot.image);
+    const art = shot.image ? customArtOf(picked, shot.image) : picked;
 
     const weather: EffectId[] = [...art.weather];
     if (hits(`${scene} ${body}`, ['비', '우산', '장마']) > 0 && !weather.includes('rain')) weather.push('rain');
@@ -271,6 +299,7 @@ export function buildScenePlan(shorts: Shorts): ScenePlan {
       weather: [...new Set(weather)].slice(0, 2),
       label: `${art.title} · ${SHOT_LABEL[art.shot]}`,
       light: Math.min(1.15, art.light * (0.86 + rng.range(0, 0.3))),
+      custom,
     };
   });
 
@@ -284,6 +313,8 @@ export function buildScenePlan(shorts: Shorts): ScenePlan {
     accent: cuts[0]?.palette.accent ?? '#ffd6f2',
     template: shorts.template,
     tone: shorts.tone,
+    style: styleOf(shorts),
+    brand: brandOf(shorts),
   };
 }
 

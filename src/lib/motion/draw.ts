@@ -4,7 +4,7 @@ import { rgba } from './color';
 import { STAGE_H, STAGE_W, cameraAt, glowCircle, motionScale, quality, type CamState, type MotionLevel } from './stage';
 import { getArt } from './artLoader';
 import { drawAmbient, drawForeground, drawLightSweep } from './effects';
-import { drawCaption, drawHud } from './captions';
+import { drawCaption, drawBrand, drawHud, drawPlatformMark } from './captions';
 import { beatFlash, drawEntryBurst, drawGlitchSlices, drawLightLeaks, drawLivingArt } from './live';
 
 export interface RenderOptions {
@@ -15,6 +15,8 @@ export interface RenderOptions {
   /** 특정 컷만 그릴 때 */
   cutIndex?: number;
   cutTime?: number;
+  /** Free 요금제 표식 — 영상에도 그대로 구워집니다(Pro·Team은 꺼짐). */
+  platformMark?: boolean;
 }
 
 /** 이번 프레임의 카메라·워프 수치 — E2E가 "정말 움직이는지"를 숫자로 확인합니다. */
@@ -268,17 +270,22 @@ export function renderFrame(canvas: HTMLCanvasElement, plan: ScenePlan, time: nu
   if (quality.detail >= 0.85) drawGrain(ctx, canvas, Math.sin(local * 9));
 
   // 6) 자막·HUD — 영상에도 똑같이 구워집니다.
+  const style = plan.style;
+  const captionScale = style.size === 's' ? 0.84 : style.size === 'l' ? 1.18 : 1;
+  const captionBottom =
+    style.position === 'top' ? 470 : style.position === 'middle' ? STAGE_H * 0.56 : STAGE_H - 268;
   if (options.captions !== false) {
     const plain = shot.subtitle.replace(/\*/g, '').trim();
     drawCaption(ctx, shot.subtitle, {
       accent: cut.palette.accent,
-      fontSize: 84,
-      maxWidth: 860,
+      fontSize: 84 * captionScale,
+      maxWidth: style.size === 'l' ? 900 : 860,
       centerX: STAGE_W / 2,
-      bottom: STAGE_H - 268,
+      bottom: captionBottom,
       elapsed: local,
       duration,
       bubble: shot.role === 'cta' && plain.length <= 22,
+      theme: style.theme,
     });
   }
   if (options.hud !== false) {
@@ -290,6 +297,19 @@ export function renderFrame(canvas: HTMLCanvasElement, plan: ScenePlan, time: nu
       accent: cut.palette.accent,
       fontScale: 1,
       elapsed: local,
+    });
+  }
+
+  // 7) 플랫폼 표식(Free) — 브랜드 워터마크보다 아래에 아주 작게.
+  if (options.platformMark) drawPlatformMark(ctx);
+
+  // 8) 브랜드 워터마크 — 채널 핸들·로고도 영상에 함께 구워집니다.
+  if (plan.brand?.enabled) {
+    drawBrand(ctx, {
+      handle: plan.brand.handle,
+      accent: cut.palette.accent,
+      corner: plan.brand.corner,
+      logo: plan.brand.logoId ? getArt(`img:${plan.brand.logoId}`) : null,
     });
   }
 }

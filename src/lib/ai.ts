@@ -2,6 +2,7 @@ import type { CutVisual, Shorts, Shot, TemplateId, Tone } from '../types';
 import { TEMPLATE_MAP, roleOf } from './templates';
 import { clampText, normalizeMarks } from './text';
 import { newSeed } from './motion/rng';
+import { BGM_BY_TEMPLATE, DEFAULT_AUDIO, DEFAULT_BRAND, DEFAULT_STYLE } from './defaults';
 
 /**
  * api/generate.ts (Vercel Serverless Function)와 이야기하는 클라이언트.
@@ -160,6 +161,9 @@ export async function requestAiShorts(input: AiInput, timeoutMs = 22000): Promis
       source: 'ai',
       updatedAt: Date.now(),
       seed: newSeed(),
+      audio: { ...DEFAULT_AUDIO, mood: BGM_BY_TEMPLATE[input.template] },
+      style: { ...DEFAULT_STYLE },
+      brand: { ...DEFAULT_BRAND },
     };
   } finally {
     done();

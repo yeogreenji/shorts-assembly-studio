@@ -11,16 +11,29 @@
 @theme {
   --font-sans: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR',
     system-ui, -apple-system, sans-serif;
-  --color-ink-950: #07060c;
-  --color-ink-900: #0b0912;
-  --color-ink-800: #12101b;
-  --color-ink-700: #1a1726;
-  --color-brand-100: #ffe6f2;
-  --color-brand-200: #ffcde4;
-  --color-brand-300: #ffa8d2;
-  --color-brand-400: #ff7ab8;
-  --color-brand-500: #f0569f;
-  --color-brand-600: #d23b85;
+
+  /* 표면 — 중성 차콜. 보라·분홍 그라데이션 없이 한 겹씩만 쌓습니다. */
+  --color-ink-950: #0b0d11;
+  --color-ink-900: #101319;
+  --color-ink-850: #13161d;
+  --color-ink-800: #171b22;
+  --color-ink-750: #1a1f27;
+  --color-ink-700: #1d222b;
+
+  --color-line-soft: #1f242d;
+  --color-line: #262c36;
+  --color-line-strong: #343b47;
+
+  --color-mist-100: #f4f6fa;
+  --color-mist-200: #dfe4ec;
+  --color-mist-300: #c2c9d5;
+  --color-mist-400: #98a1b1;
+  --color-mist-500: #798394;
+  --color-mist-600: #5c6574;
+
+  --color-mint-300: #6ee7b7;
+  --color-mint-400: #34d399;
+  --color-mint-500: #12a97a;
 }
 
 :root {
@@ -33,107 +46,278 @@ body,
   min-height: 100%;
 }
 
-body {
-  margin: 0;
-  background:
-    radial-gradient(1100px 720px at 6% -16%, rgba(255, 122, 184, 0.16), transparent 60%),
-    radial-gradient(900px 640px at 98% -8%, rgba(124, 92, 255, 0.18), transparent 58%),
-    radial-gradient(760px 520px at 50% 108%, rgba(79, 209, 255, 0.08), transparent 60%),
-    #07060c;
-  color: #f6f2f8;
-  font-family: var(--font-sans);
-  font-feature-settings: 'ss01' 1, 'cv01' 1;
-  letter-spacing: -0.01em;
-  -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+@layer base {
+  body {
+    margin: 0;
+    background: #0b0d11;
+    color: var(--color-mist-100);
+    font-family: var(--font-sans);
+    font-feature-settings: 'ss01' 1;
+    letter-spacing: -0.011em;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background: rgba(52, 211, 153, 0.24);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2b323d transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #2b323d;
+    border-radius: 999px;
+    border: 2px solid #0b0d11;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
-/* 아주 옅은 필름 그레인 — 화면이 매끈한 PPT처럼 보이지 않게 */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.22;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.28) 0.5px, transparent 0.5px);
-  background-size: 3px 3px;
+@layer components {
+  /* ── 표면 ─────────────────────────────────────────────── */
+  .surface {
+    background: var(--color-ink-850);
+    border: 1px solid var(--color-line-soft);
+    border-radius: 12px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.028);
+  }
+
+  .surface-sunken {
+    background: #0e1116;
+    border: 1px solid var(--color-line-soft);
+    border-radius: 10px;
+  }
+
+  .rail {
+    background: var(--color-ink-900);
+    border: 1px solid var(--color-line-soft);
+    border-radius: 12px;
+  }
+
+  .display {
+    letter-spacing: -0.028em;
+  }
+
+  .mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  /* ── 입력 ─────────────────────────────────────────────── */
+  .field {
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid var(--color-line);
+    background: #0d1015;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--color-mist-100);
+    outline: none;
+    transition: border-color 0.14s ease, background-color 0.14s ease, box-shadow 0.14s ease;
+  }
+  .field::placeholder {
+    color: var(--color-mist-600);
+  }
+  .field:hover {
+    border-color: #303845;
+  }
+  .field:focus {
+    border-color: #4b5566;
+    background: #0f1319;
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.045);
+  }
+
+  button:focus-visible,
+  [role='button']:focus-visible,
+  a:focus-visible {
+    outline: 2px solid var(--color-mint-400);
+    outline-offset: 2px;
+  }
+
+  /* ── 버튼 ─────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    font-weight: 600;
+    transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+    white-space: nowrap;
+  }
+
+  /* 기본 액션 — 흰색 단색(Linear·Vercel 계열) */
+  .btn-primary {
+    background: var(--color-mist-100);
+    color: #0b0d11;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 2px rgba(0, 0, 0, 0.5);
+  }
+  .btn-primary:hover {
+    background: #ffffff;
+  }
+  .btn-primary:disabled {
+    background: #2a313c;
+    color: #798394;
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
+  .btn-ghost {
+    background: var(--color-ink-800);
+    border-color: var(--color-line);
+    color: var(--color-mist-200);
+  }
+  .btn-ghost:hover {
+    background: #1d222b;
+    border-color: var(--color-line-strong);
+    color: #fff;
+  }
+  .btn-ghost:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .btn-quiet {
+    color: var(--color-mist-400);
+  }
+  .btn-quiet:hover {
+    color: var(--color-mist-100);
+    background: rgba(255, 255, 255, 0.045);
+  }
+
+  /* ── 세그먼트·탭 ──────────────────────────────────────── */
+  .seg {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 8px;
+    background: #0e1116;
+    border: 1px solid var(--color-line-soft);
+  }
+
+  .seg-item {
+    flex: 1;
+    border-radius: 6px;
+    padding: 0.32rem 0.4rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: var(--color-mist-400);
+    transition: background-color 0.14s ease, color 0.14s ease;
+    white-space: nowrap;
+  }
+  .seg-item:hover {
+    color: var(--color-mist-100);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .seg-item[data-active='true'] {
+    background: #232a34;
+    color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+
+  .tab {
+    position: relative;
+    padding: 0.55rem 0.1rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-mist-500);
+    transition: color 0.14s ease;
+  }
+  .tab:hover {
+    color: var(--color-mist-200);
+  }
+  .tab[data-active='true'] {
+    color: var(--color-mist-100);
+  }
+  .tab[data-active='true']::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--color-mist-100);
+  }
+
+  /* ── 레인지 ───────────────────────────────────────────── */
+  input[type='range'] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 999px;
+    background: #2a313c;
+    cursor: pointer;
+  }
+  input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 13px;
+    height: 13px;
+    border-radius: 999px;
+    background: #f4f6fa;
+    border: 2px solid #101319;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  }
+  input[type='range']::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: 2px solid #101319;
+    border-radius: 999px;
+    background: #f4f6fa;
+  }
+  input[type='range']:disabled {
+    opacity: 0.4;
+  }
+
+  input[type='checkbox'] {
+    accent-color: var(--color-mint-400);
+  }
+
+  /* ── 상태 점 ──────────────────────────────────────────── */
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .dot-live {
+    background: var(--color-mint-400);
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.14);
+  }
+
+  /* ── 무대(스테이지) ───────────────────────────────────── */
+  .stage-shell {
+    background: #0d1015;
+    border: 1px solid var(--color-line-soft);
+    border-radius: 12px;
+  }
+
 }
 
-#root {
-  position: relative;
-  z-index: 1;
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-rise {
+  animation: fade-rise 0.22s ease-out both;
 }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #322c40 transparent;
-}
-*::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-*::-webkit-scrollbar-thumb {
-  background: #322c40;
-  border-radius: 999px;
-}
-*::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.display {
-  letter-spacing: -0.035em;
-}
-
-.panel {
-  position: relative;
-  background: linear-gradient(168deg, rgba(28, 24, 38, 0.86), rgba(10, 9, 16, 0.94));
-  border: 1px solid rgba(255, 255, 255, 0.075);
-  border-radius: 24px;
-  box-shadow:
-    0 30px 70px -46px rgba(0, 0, 0, 0.95),
-    inset 0 1px 0 rgba(255, 255, 255, 0.055);
-  /* 배경 블러(backdrop-filter)는 캔버스가 매 프레임 바뀔 때 화면 전체를 다시 흐리게 만들어
-     프레임을 절반으로 떨어뜨립니다. 패널은 이미 불투명 그라데이션이라 없어도 결이 같습니다. */
-}
-
-.field {
-  width: 100%;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(6, 5, 11, 0.72);
-  padding: 0.5rem 0.7rem;
-  font-size: 0.875rem;
-  color: #f6f2f8;
-  outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.field:focus {
-  border-color: rgba(255, 168, 210, 0.7);
-  box-shadow: 0 0 0 3px rgba(255, 122, 184, 0.14);
-}
-.field::placeholder {
-  color: #635d72;
-}
-
-button:focus-visible,
-[role='button']:focus-visible {
-  outline: 2px solid rgba(255, 168, 210, 0.8);
-  outline-offset: 2px;
-}
-
-/* ── 브랜드 버튼 ───────────────────────────────────── */
-.btn-primary {
-  background-image: linear-gradient(135deg, #ff8cc8 0%, #f0569f 42%, #9b6bff 100%);
-  box-shadow:
-    0 18px 40px -18px rgba(240, 86, 159, 0.65),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35);
-}
-.btn-primary:hover {
-  filter: brightness(1.06);
-}
-
-/* ── 자막·카드 등장 ────────────────────────────────── */
 @keyframes word-in {
   0% {
     opacity: 0;
@@ -183,27 +367,11 @@ button:focus-visible,
   animation: hl-pop 0.52s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
 }
 
-/* 화면 질감 — 쇼츠 느낌의 미세한 그레인 */
-.grain {
-  background-image: radial-gradient(rgba(255, 255, 255, 0.5) 0.5px, transparent 0.5px);
-  background-size: 3px 3px;
-  mix-blend-mode: overlay;
-}
-
-/* 아트 썸네일 스트립 — 살짝 흐르는 마퀴 */
-@keyframes art-marquee {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-50%);
-  }
-}
-.art-marquee {
-  animation: art-marquee 42s linear infinite;
-}
 @media (prefers-reduced-motion: reduce) {
-  .art-marquee {
+  .kin-word,
+  .sub-pop,
+  .hl-pop,
+  .fade-rise {
     animation: none;
   }
 }

@@ -13,7 +13,7 @@
   · 모바일 390px: 가로 넘침 0 · 콘솔 에러 0
 """
 
-import os, re, json, subprocess, sys, time, socket, atexit, contextlib, urllib.request, urllib.error
+import os, re, json, subprocess, sys, time, socket, atexit, contextlib, urllib.request, urllib.parse, urllib.error
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
 os.environ["LD_LIBRARY_PATH"] = "/workspace/.libs/usr/lib/x86_64-linux-gnu" + (
@@ -128,6 +128,21 @@ SPEECH_STUB = """
   } catch (e) {}
 })();
 """
+
+
+def tts_api(port, text):
+    """GET /api/tts — 상태 JSON 또는 음성 바이트(길이만 확인)."""
+    query = f"?text={urllib.parse.quote(text)}" if text else ""
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/tts{query}", method="GET")
+    try:
+        with urllib.request.urlopen(req) as res:
+            body = res.read()
+            ctype = res.headers.get("content-type", "")
+            if "json" in ctype:
+                return res.status, json.loads(body.decode() or "{}")
+            return res.status, {"bytes": len(body), "type": ctype, "cached": "immutable" in (res.headers.get("cache-control") or "")}
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode() or "{}")
 
 
 def new_page(browser, url, tag, viewport=None, permissions=True):
@@ -270,6 +285,16 @@ def bright_ratio(path, top, bottom):
     return bright / max(1, len(pixels))
 
 
+def region_bright(path, y0, y1, threshold=150):
+    """영상 프레임의 세로 구간에서 밝은 픽셀 비율(플랫폼 표식처럼 옅은 흰색까지 포함)."""
+    image = Image.open(path).convert("RGB")
+    width, height = image.size
+    crop = image.crop((0, int(height * y0), width, int(height * y1)))
+    pixels = list(crop.getdata())
+    bright = sum(1 for r, g, b in pixels if min(r, g, b) > threshold)
+    return bright / max(1, len(pixels))
+
+
 def image_region_mean(path, x0=0.15, y0=0.12, x1=0.85, y1=0.57):
     image = Image.open(path).convert("RGB")
     width, height = image.size
@@ -300,6 +325,17 @@ def no_overflow(page):
     return page.evaluate("document.documentElement.scrollWidth - window.innerWidth") <= 0
 
 
+def hero_shot(page, path):
+    """대표 화면 — 재생을 멈추고 재생 오버레이를 숨긴 뒤, 자막이 다 뜬 프레임으로 한 장."""
+    page.click('[data-testid="shot-jump-0"]')
+    page.wait_for_timeout(300)
+    pause_video(page)
+    page.add_style_tag(content=".pause-overlay{display:none !important} header{position:static !important}")
+    page.evaluate("window.__shortcutRenderAt && window.__shortcutRenderAt(1.2)")
+    page.wait_for_timeout(500)
+    page.screenshot(path=path, full_page=True)
+
+
 def clean_shot(page, path):
     """sticky 헤더가 페이지 중간에 찍히지 않도록 잠깐 static으로 바꿔 찍습니다."""
     page.add_style_tag(content="header{position:static !important}")
@@ -321,19 +357,371 @@ def compose_cuts():
     sheet.save(os.path.join(SHOTS, "04-scenes.png"))
 
 
+def render_region(page, at=0.4, x0=0.15, y0=0.12, x1=0.85, y1=0.57):
+    """한 프레임을 그리고 같은 호출 안에서 바로 픽셀을 읽습니다(재생 루프와 경쟁하지 않음)."""
+    return page.evaluate(
+        """([at, x0, y0, x1, y1]) => {
+          const hasHook = typeof window.__shortcutRenderAt === 'function';
+          if (hasHook) window.__shortcutRenderAt(at);
+          const c = document.querySelector('[data-testid="motion-canvas"]');
+          const ctx = c.getContext('2d');
+          const sx = Math.floor(c.width * x0), sy = Math.floor(c.height * y0);
+          const w = Math.max(1, Math.floor(c.width * (x1 - x0)));
+          const h = Math.max(1, Math.floor(c.height * (y1 - y0)));
+          const d = ctx.getImageData(sx, sy, w, h).data;
+          let r = 0, g = 0, b = 0, n = 0;
+          for (let i = 0; i < d.length; i += 4 * 41) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n += 1; }
+          const probe = { ...(window.__shortcutFrame || {}) };
+          return {
+            mean: [Math.round(r / n), Math.round(g / n), Math.round(b / n)],
+            hook: hasHook,
+            index: probe.index,
+            time: probe.time === undefined ? null : Math.round(probe.time * 100) / 100,
+            warp: probe.warp === undefined ? null : Math.round(probe.warp * 10) / 10,
+            art: c.dataset.art,
+          };
+        }""",
+        [at, x0, y0, x1, y1],
+    )
+
+
+def project_seconds(page):
+    text = page.inner_text('[data-testid="project-summary"]')
+    match = re.search(r"약 ([\d.]+)초", text)
+    return float(match.group(1)) if match else -1.0
+
+
+def set_range(page, selector, value):
+    """range input은 el.value만 바꾸면 React가 못 알아챕니다 — 원래 setter로 값를 넣고 input을 보냅니다."""
+    page.eval_on_selector(
+        selector,
+        """(el, value) => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+          setter.call(el, String(value));
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }""",
+        value,
+    )
+
+
+def pause_video(page):
+    """재생 중이면 멈추고, 확실히 멈춘 상태가 될 때까지 기다립니다."""
+    for _ in range(3):
+        if not is_playing(page):
+            return True
+        page.click('[data-testid="play-toggle"]')
+        if wait_until(lambda: not is_playing(page), 3):
+            return True
+    return not is_playing(page)
+
+
+def ensure_sound_on(page):
+    if page.get_attribute('[data-testid="sound-toggle"]', 'aria-pressed') == 'false':
+        page.click('[data-testid="sound-toggle"]')
+        page.wait_for_timeout(200)
+
+
+def open_tab(page, tab):
+    """오른쪽 인스펙터 탭(오디오·TTS / 자막·브랜드 / 내보내기)을 엽니다."""
+    sel = f'[data-testid="inspector-tab-{tab}"]'
+    if page.get_attribute(sel, "data-active") != "true":
+        page.click(sel)
+        page.wait_for_timeout(200)
+
+
+def audio_stats(page):
+    return page.evaluate("({ ...(window.__shortcutAudio || {}) })")
+
+
+def export_record(page):
+    """마지막 저장 영상 — 브라우저 안에서 파일을 다시 풀어 실제 소리를 재 봅니다."""
+    return page.evaluate(
+        """async () => {
+          const r = window.__shortcutLastExport;
+          if (!r) return null;
+          const buf = await r.blob.arrayBuffer();
+          const ctx = new AudioContext();
+          let rms = 0, peak = 0, seconds = 0;
+          try {
+            const decoded = await ctx.decodeAudioData(buf.slice(0));
+            const data = decoded.getChannelData(0);
+            let sum = 0, n = 0;
+            for (let i = 0; i < data.length; i += 7) {
+              const v = Math.abs(data[i]);
+              if (v > peak) peak = v;
+              sum += v * v;
+              n += 1;
+            }
+            rms = Math.sqrt(sum / Math.max(1, n));
+            seconds = decoded.duration;
+          } catch (e) { /* 오디오 트랙 없음 */ }
+          await ctx.close();
+          return {
+            withAudio: r.withAudio, narratedCuts: r.narratedCuts, format: r.format,
+            width: r.width, height: r.height, size: r.blob.size, rms, peak, seconds,
+          };
+        }"""
+    )
+
+
+def emoji_chars(page):
+    return page.evaluate(
+        r"""() => {
+          const re = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
+          return [...(document.body.innerText || '')].filter((ch) => re.test(ch)).slice(0, 8);
+        }"""
+    )
+
+
+def column_left(page, selector):
+    box = page.locator(selector).first.bounding_box()
+    return round(box["x"]) if box else -1
+
+
+def canvas_strip(page, x0=0.25, x1=0.75, y0=0.94, y1=0.99):
+    """캔버스 아래 가운데 띠(플랫폼 표식 자리)의 픽셀 — Free/Pro 비교용."""
+    return page.evaluate(
+        """([x0, x1, y0, y1]) => {
+          const c = document.querySelector('[data-testid="motion-canvas"]');
+          const ctx = c.getContext('2d');
+          const sx = Math.floor(c.width * x0), sy = Math.floor(c.height * y0);
+          const w = Math.max(1, Math.floor(c.width * (x1 - x0)));
+          const h = Math.max(1, Math.floor(c.height * (y1 - y0)));
+          const d = ctx.getImageData(sx, sy, w, h).data;
+          const out = [];
+          for (let i = 0; i < d.length; i += 4 * 2) out.push(d[i], d[i + 1], d[i + 2]);
+          return out;
+        }""",
+        [x0, x1, y0, y1],
+    )
+
+
+def strip_bright(pixels):
+    if not pixels:
+        return 0.0
+    n = len(pixels) // 3
+    bright = sum(1 for i in range(0, len(pixels), 3) if min(pixels[i], pixels[i + 1], pixels[i + 2]) > 165)
+    return bright / max(1, n)
+
+
+def canvas_region_bright(page, y0=0.92, y1=0.995):
+    """캔버스 아래쪽(플랫폼 표식 자리)의 밝은 픽셀 비율."""
+    return page.evaluate(
+        """([y0, y1]) => {
+          const c = document.querySelector('[data-testid="motion-canvas"]');
+          const ctx = c.getContext('2d');
+          const sy = Math.floor(c.height * y0);
+          const h = Math.max(1, Math.floor(c.height * (y1 - y0)));
+          const d = ctx.getImageData(0, sy, c.width, h).data;
+          let bright = 0, n = 0;
+          for (let i = 0; i < d.length; i += 4) {
+            if (d[i] > 170 && d[i + 1] > 170 && d[i + 2] > 170) bright += 1;
+            n += 1;
+          }
+          return bright / Math.max(1, n);
+        }""",
+        [y0, y1],
+    )
+
+
+def make_test_image(path):
+    """컷에 올릴 내 사진 — 색으로 쉽게 구분되게 단색 배경 + 도형."""
+    from PIL import ImageDraw
+
+    image = Image.new("RGB", (900, 1600), (238, 86, 128))
+    draw = ImageDraw.Draw(image)
+    # 가운데 작은 표식만 — 화면 어느 부분을 재도 분홍이 나오게(카메라가 확대해도 같은 색).
+    draw.ellipse([390, 700, 510, 820], fill=(255, 255, 255))
+    image.save(path)
+
+
+def run_studio_extras(page):
+    """상용 고도화분 — 프리셋·배경음·자막 테마·내 이미지·워터마크·세이프존·드래프트."""
+    print("── 원클릭 상용 프리셋", flush=True)
+    check("프리셋 4종", page.locator('[data-testid^="preset-"]').count() == 4)
+    page.click('[data-testid="preset-issue-60"]')
+    page.wait_for_timeout(600)
+    check("프리셋: 6컷 유지", page.locator('[data-testid^="shot-card-"]').count() == 6)
+    seconds = project_seconds(page)
+    check("프리셋: 60초 요약 구성", seconds > 45, f"{seconds}초")
+    check("프리셋: 배경음 자동 선택(긴장)",
+          page.get_attribute('[data-testid="shorts-frame"]', "data-audio") == "tension",
+          page.get_attribute('[data-testid="shorts-frame"]', "data-audio"))
+    check("프리셋: 대본이 프리셋 문장", "세 줄" in shot_value(page, 0), shot_value(page, 0))
+
+    page.click('[data-testid="preset-review"]')
+    page.wait_for_timeout(500)
+    open_tab(page, "caption")
+    check("프리셋: 리뷰 자막 테마(미니멀) 적용",
+          page.get_attribute('[data-testid="caption-theme-minimal"]', "aria-pressed") == "true")
+    short_seconds = project_seconds(page)
+    check("프리셋: 리뷰는 짧은 숏폼", 14 < short_seconds < 22, f"{short_seconds}초")
+
+    print("── 배경음(BGM)", flush=True)
+    open_tab(page, "audio")
+    ensure_sound_on(page)
+    for mood in ("off", "trendy", "romance", "tension", "comic"):
+        check(f"배경음: {mood} 버튼", page.locator(f'[data-testid="bgm-{mood}"]').count() == 1)
+    page.click('[data-testid="bgm-romance"]')
+    check("배경음: 무드 변경 반영",
+          wait_until(lambda: page.get_attribute('[data-testid="shorts-frame"]', "data-audio") == "romance", 2))
+    set_range(page, '[data-testid="bgm-volume"]', 20)
+    page.wait_for_timeout(900)
+    saved_audio = page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').audio")
+    check("배경음: 볼륨 저장", bool(saved_audio) and abs(float(saved_audio.get("volume", 1)) - 0.2) < 0.01,
+          str(saved_audio))
+    page.click('[data-testid="bgm-mute"]')
+    page.wait_for_timeout(900)
+    muted = page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').audio.muted")
+    check("배경음: 음소거 저장", muted is True, str(muted))
+    page.click('[data-testid="bgm-mute"]')
+    page.wait_for_timeout(900)
+    unmuted = page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').audio.muted")
+    check("배경음: 음소거 해제", unmuted is False, str(unmuted))
+    page.click('[data-testid="bgm-trendy"]')
+    page.wait_for_timeout(300)
+
+    print("── 자막 스튜디오", flush=True)
+    open_tab(page, "caption")
+    render_at(page, 0.7)
+    before = canvas_pixels(page)
+    page.click('[data-testid="caption-theme-neon"]')
+    page.wait_for_timeout(250)
+    render_at(page, 0.7)
+    changed = pixel_diff(before, canvas_pixels(page))
+    check("자막: 테마를 바꾸면 화면도 바뀜", changed["pct"] > 0.2, str(changed))
+    page.click('[data-testid="caption-size-l"]')
+    page.wait_for_timeout(200)
+    check("자막: 크기 크게 선택", page.get_attribute('[data-testid="caption-size-l"]', "aria-pressed") == "true")
+    page.click('[data-testid="caption-pos-top"]')
+    page.wait_for_timeout(200)
+    check("자막: 위치 위 선택", page.get_attribute('[data-testid="caption-pos-top"]', "aria-pressed") == "true")
+    page.click('[data-testid="caption-pos-bottom"]')
+    page.click('[data-testid="caption-size-m"]')
+    page.click('[data-testid="caption-theme-impact"]')
+    page.wait_for_timeout(200)
+
+    print("── 컷 길이·내 이미지·워터마크·세이프존", flush=True)
+    page.click('[data-testid="preset-balance-game"]')
+    page.wait_for_timeout(500)
+    base_total = project_seconds(page)
+    set_range(page, '[data-testid="shot-duration-0"]', 6)
+    page.wait_for_timeout(400)
+    longer = project_seconds(page)
+    check("컷 길이: 늘리면 총 길이도 늘어남", longer > base_total + 2, f"{base_total} → {longer}")
+    card_text = page.inner_text('[data-testid="shot-card-0"]')
+    check("컷 길이: 카드에 초 표시", "6.0s" in card_text, card_text[:60])
+
+    image_path = os.path.join(ROOT, "scripts/.build/custom-cut.png")
+    make_test_image(image_path)
+    page.click('[data-testid="shot-jump-0"]')
+    wait_until(lambda: is_playing(page), 4)
+    pause_video(page)
+    page.set_input_files('[data-testid="shot-image-input-0"]', image_path)
+    uploaded = wait_until(lambda: page.get_attribute('[data-testid="shot-art-0"]', "data-custom") == "true", 6)
+    check("내 이미지: 컷 카드에 업로드", uploaded, page.get_attribute('[data-testid="shot-art-0"]', "data-custom"))
+    check("내 이미지: 캔버스가 내 이미지로 그림", wait_until(lambda: art_id(page).startswith("img:"), 6), art_id(page))
+    # 그림은 data URL을 읽어 오느라 한 박자 늦게 도착합니다 — 칠해질 때까지 기다립니다.
+    # 재생이 멈춘 상태에서 1번 컷을 고정해 놓고 재 봅니다(재생 중이면 화면이 다음 컷으로 넘어갑니다).
+    page.wait_for_timeout(600)
+    pause_video(page)
+    sample = render_region(page, 0.4)
+    region = sample["mean"]
+    check("내 이미지: 올린 색이 화면에 보임", region[0] > 110 and region[0] > region[1] * 1.3, str(sample))
+    saved = wait_until(
+        lambda: bool(
+            page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').cuts?.[0]?.image")
+        ),
+        5,
+    )
+    saved_cut = page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').cuts?.[0]?.image")
+    check("내 이미지: 컷에 참조로 저장", saved and bool(saved_cut.get("id")), str(saved_cut))
+
+    render_at(page, 1.0)
+    before_brand = canvas_pixels(page)
+    page.click('[data-testid="brand-toggle"]')
+    page.fill('[data-testid="brand-handle"]', "studio_test")
+    page.wait_for_timeout(300)
+    render_at(page, 1.0)
+    after_brand = canvas_pixels(page)
+    brand_diff = pixel_diff(before_brand, after_brand)
+    check("브랜드: 워터마크가 캔버스에 그려짐", brand_diff["pct"] > 0.05, str(brand_diff))
+    wait_until(lambda: bool(page.evaluate("(JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').brand||{}).handle")), 4)
+    saved_brand = page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').brand")
+    check("브랜드: 핸들·켜짐 저장",
+          bool(saved_brand) and saved_brand.get("handle") == "studio_test" and bool(saved_brand.get("enabled")),
+          str(saved_brand))
+    page.click('[data-testid="brand-corner-top-left"]')
+    page.wait_for_timeout(250)
+    render_at(page, 1.0)
+    moved = pixel_diff(canvas_pixels(page), before_brand)
+    check("브랜드: 자리 이동도 반영", moved["pct"] > 0.05, str(moved))
+
+    check("세이프존: 기본 꺼짐", page.locator('[data-testid="safe-zone"]').count() == 0)
+    render_at(page, 1.0)
+    before_zone = canvas_pixels(page)
+    page.click('[data-testid="safe-zone-toggle"]')
+    check("세이프존: 오버레이 표시", wait_until(lambda: page.locator('[data-testid="safe-zone"]').count() == 1, 3))
+    render_at(page, 1.0)
+    zone_diff = pixel_diff(before_zone, canvas_pixels(page))
+    check("세이프존: 영상(캔버스)에는 안 들어감", zone_diff["mean"] < 0.5, str(zone_diff))
+    page.click('[data-testid="safe-zone-toggle"]')
+
+    print("── 드래프트 저장·불러오기", flush=True)
+    page.fill('[data-testid="shot-subtitle-0"]', "드래프트 확인용 자막")
+    page.wait_for_timeout(300)
+    page.fill('[data-testid="draft-name"]', "테스트 드래프트")
+    page.click('[data-testid="draft-save"]')
+    page.wait_for_timeout(400)
+    page.click('[data-testid="drafts-toggle"]')
+    check("드래프트: 목록에 저장됨", "테스트 드래프트" in page.inner_text('[data-testid="draft-list"]'),
+          page.inner_text('[data-testid="draft-list"]')[:80])
+    page.click('[data-testid="preset-love-story"]')
+    page.wait_for_timeout(400)
+    check("드래프트: 다른 프리셋으로 갈아탐", shot_value(page, 0) != "드래프트 확인용 자막", shot_value(page, 0))
+    page.locator('[data-testid="draft-list"] button:has-text("열기")').first.click()
+    check("드래프트: 불러오면 그때 자막·설정 복원", wait_until(lambda: shot_value(page, 0) == "드래프트 확인용 자막", 4),
+          shot_value(page, 0))
+    page.wait_for_timeout(900)
+    restored = page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:shorts:v2')||'{}').audio")
+    check("드래프트: 배경음 설정도 함께 복원", bool(restored) and restored.get("mood") == "trendy", str(restored))
+    page.click('[aria-label="테스트 드래프트 지우기"]')
+    page.wait_for_timeout(300)
+    check("드래프트: 지우기", "테스트 드래프트" not in page.inner_text('[data-testid="draft-list"]'))
+    page.click('[data-testid="drafts-toggle"]')
+
+
 def run_offline(browser, base):
     context, page = new_page(browser, base, "offline")
 
     print("── 첫 화면 구성", flush=True)
     check("첫 화면: 주제 입력 1개", page.locator('[data-testid="topic-input"]').count() == 1)
-    check("첫 화면: 템플릿 4종", page.locator('[data-testid^="template-"]').count() == 4)
+    check("첫 화면: 템플릿 6종", page.locator('[data-testid^="template-"]').count() == 6)
     check("첫 화면: 톤 3종", page.locator('[data-testid^="tone-"]').count() == 3)
     check("첫 화면: 만들기 버튼 1개", page.locator('[data-testid="generate"]').count() == 1)
     check("첫 화면: 컷 카드 6개", page.locator('[data-testid^="shot-card-"]').count() == 6)
-    check("첫 화면: 텍스트 탭·패널 전환 없음", page.locator("nav").count() == 0)
     check("첫 화면: 서버 없음 배지", "내장 대본 엔진" in page.inner_text('[data-testid="server-state"]'),
           page.inner_text('[data-testid="server-state"]'))
     check("첫 화면: 정적 프리셋 이미지 없음", page.locator('img[src*="presets"]').count() == 0)
+
+    print("── 프로 스튜디오 레이아웃(3열) · 디자인", flush=True)
+    left = column_left(page, '[data-testid="topic-input"]')
+    stage = column_left(page, '[data-testid="shorts-frame"]')
+    right = column_left(page, '[data-testid="inspector-tab-audio"]')
+    check("레이아웃: 왼쪽 대본 · 가운데 스테이지 · 오른쪽 인스펙터", 0 < left < stage < right,
+          f"left={left} stage={stage} right={right}")
+    check("레이아웃: 인스펙터 탭 3개",
+          page.locator('[data-testid="inspector-tab-audio"], [data-testid="inspector-tab-caption"], [data-testid="inspector-tab-export"]').count() == 3)
+    check("레이아웃: 모바일 탭은 데스크톱에서 숨김", not page.locator('[data-testid="mobile-tab-stage"]').is_visible())
+    check("디자인: 배경 그라데이션 없음(중성 차콜)",
+          page.evaluate("getComputedStyle(document.body).backgroundImage") == "none",
+          page.evaluate("getComputedStyle(document.body).backgroundImage"))
+    body_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+    check("디자인: 표면 #0B0D11 계열", body_bg in ("rgb(11, 13, 17)", "rgb(11, 13, 17)"), body_bg)
+    found_emoji = emoji_chars(page)
+    check("디자인: 화면에 이모지 0개", not found_emoji, str(found_emoji))
+    check("디자인: 요금제 배지 표시", page.locator('[data-testid="pricing-open"]').is_visible())
 
     print("── 웹툰 일러스트 캔버스", flush=True)
     check("모션 캔버스 1개", page.locator('[data-testid="motion-canvas"]').count() == 1)
@@ -511,6 +899,7 @@ def run_offline(browser, base):
           f"{after_order[0]} / {before_order[1]}")
 
     print("── 내보내기", flush=True)
+    open_tab(page, "export")
     page.click('[data-testid="copy-script"]')
     page.wait_for_timeout(500)
     try:
@@ -554,6 +943,14 @@ def run_offline(browser, base):
     if is_playing(page):
         page.click('[data-testid="play-toggle"]')
     check("영상 저장 버튼", page.locator('[data-testid="export-video"]').count() == 1)
+    export_format = page.get_attribute('[data-testid="export-format"]', "data-format")
+    check("영상 형식 배지: MP4 또는 WebM", export_format in ("mp4", "webm"), str(export_format))
+    # 배경음이 실제로 녹음되는지 보려면 음소거를 풀고 무드를 켜 둡니다(앞선 음소거 테스트에서 꺼졌음).
+    ensure_sound_on(page)
+    open_tab(page, "audio")
+    page.click('[data-testid="bgm-trendy"]')
+    page.wait_for_timeout(300)
+    open_tab(page, "export")
     if page.locator('[data-testid="export-video"]').is_enabled():
         try:
             with page.expect_download(timeout=90000) as video_info:
@@ -561,11 +958,57 @@ def run_offline(browser, base):
             video_path = video_info.value.path()
             video_size = os.path.getsize(video_path) if video_path else 0
             check("영상 저장: 파일 생성", video_size > 50000, f"{video_size} bytes")
-            check("영상 저장: .webm 확장자", (video_info.value.suggested_filename or "").endswith(".webm"),
-                  video_info.value.suggested_filename)
+            expected_ext = ".mp4" if export_format == "mp4" else ".webm"
+            check(f"영상 저장: {expected_ext} 확장자(배지와 일치)",
+                  (video_info.value.suggested_filename or "").endswith(expected_ext),
+                  f"{video_info.value.suggested_filename} / badge={export_format}")
+            record = export_record(page) or {}
+            check("영상 저장: 720p HD (Free)", record.get("width") == 720 and record.get("height") == 1280, str(record))
+
+            audio_state = page.evaluate(
+                """async () => {
+                  try {
+                    const Ctor = window.AudioContext || window.webkitAudioContext;
+                    const ctx = new Ctor();
+                    await ctx.resume();
+                    const state = ctx.state;
+                    await ctx.close();
+                    return state;
+                  } catch (e) { return 'error'; }
+                }"""
+            )
+            probe = subprocess.run([FFMPEG, "-threads", "1", "-i", video_path], capture_output=True, text=True)
+            has_audio = "Audio:" in probe.stderr
+            check("영상 저장: 오디오 트랙 포함", has_audio, (probe.stderr or "")[-160:])
+            # 녹음된 소리가 실제로 들리는지 — 브라우저에서 파일을 다시 풀어 파형을 재 봅니다.
+            sound = page.evaluate(
+                """async () => {
+                  const rec = window.__shortcutLastExport;
+                  if (!rec) return { ok: false, reason: 'no export record' };
+                  if (!rec.withAudio) return { ok: false, reason: 'exported without audio' };
+                  try {
+                    const buffer = await rec.blob.arrayBuffer();
+                    const ctx = new AudioContext();
+                    const decoded = await ctx.decodeAudioData(buffer);
+                    const data = decoded.getChannelData(0);
+                    let peak = 0, sum = 0, count = 0;
+                    for (let i = 0; i < data.length; i += 7) {
+                      const v = Math.abs(data[i]);
+                      if (v > peak) peak = v;
+                      sum += v * v;
+                      count += 1;
+                    }
+                    await ctx.close();
+                    return { ok: true, peak, rms: Math.sqrt(sum / Math.max(1, count)), seconds: decoded.duration };
+                  } catch (err) { return { ok: false, reason: String(err) }; }
+                }"""
+            )
+            check("영상 저장: 배경음이 실제 소리로 녹음됨",
+                  bool(sound.get("ok")) and sound.get("rms", 0) > 0.003,
+                  f"{sound} · AudioContext={audio_state}")
             frame_path = os.path.join(ROOT, "scripts/.build/video-frame.png")
             ff = subprocess.run(
-                [FFMPEG, "-y", "-ss", "1.0", "-i", video_path, "-frames:v", "1", frame_path],
+                [FFMPEG, "-y", "-threads", "1", "-ss", "1.0", "-i", video_path, "-frames:v", "1", frame_path],
                 capture_output=True,
                 text=True,
             )
@@ -587,7 +1030,7 @@ def run_offline(browser, base):
                 # 움직임이 영상에도 그대로 구워졌는지 — 0.7초와 1.7초 프레임 비교
                 later_path = os.path.join(ROOT, "scripts/.build/video-frame-later.png")
                 subprocess.run(
-                    [FFMPEG, "-y", "-ss", "1.7", "-i", video_path, "-frames:v", "1", later_path],
+                    [FFMPEG, "-y", "-threads", "1", "-ss", "1.7", "-i", video_path, "-frames:v", "1", later_path],
                     capture_output=True,
                 )
                 if os.path.exists(later_path):
@@ -605,6 +1048,8 @@ def run_offline(browser, base):
                 check("영상 저장: 상단 배너·게이지가 구워짐",
                       bright_ratio(os.path.join(SHOTS, "05-video-frame.png"), 0.0, 0.08) > 0.002,
                       f"top bright={bright_ratio(os.path.join(SHOTS, '05-video-frame.png'), 0.0, 0.08):.3f}")
+                mark = region_bright(os.path.join(SHOTS, "05-video-frame.png"), 0.952, 0.982)
+                check("영상 저장: Free 플랫폼 표식이 영상에 구워짐", mark > 0.006, f"mark bright={mark:.4f}")
             else:
                 check("영상 저장: 프레임 추출", False, (ff.stderr or "")[-160:])
         except Exception as exc:  # noqa: BLE001
@@ -635,14 +1080,16 @@ def run_offline(browser, base):
 
     page.evaluate("window.scrollTo(0, 0)")
     page.click('[data-testid="restart"]')
-    page.wait_for_timeout(1500)
-    clean_shot(page, os.path.join(SHOTS, "01-studio.png"))
+    page.wait_for_timeout(4200)  # 안내 토스트가 사라진 뒤에 찍습니다
+    hero_shot(page, os.path.join(SHOTS, "01-studio.png"))
 
     print("── 템플릿×톤 로컬 엔진 문장 확인", flush=True)
     combos = [
         ("balance", "cider", "월급 1.5배 vs 칼퇴"),
         ("living", "empathy", "자취 시작할 때 사는 것"),
         ("love", "humor", "소개팅 첫 카톡"),
+        ("review", "cider", "요즘 줄 서는 브런치 카페"),
+        ("issue", "cider", "이번 주 IT 이슈 정리"),
         ("it", "cider", "앱 출시 전 체크리스트"),
     ]
     firsts = []
@@ -656,7 +1103,9 @@ def run_offline(browser, base):
         well_formed = all(len(s.strip()) >= 4 for s in subs) and all(s.count("*") % 2 == 0 for s in subs)
         check(f"로컬 엔진 {tpl}/{tn}: 6컷 문장", well_formed, str(subs)[:140])
         firsts.append(subs[0])
-    check("템플릿마다 다른 대본", len(set(firsts)) == 4, str(firsts)[:160])
+    check("템플릿마다 다른 대본", len(set(firsts)) == 6, str(firsts)[:160])
+
+    run_studio_extras(page)
 
     print("── 이상한 입력 방어", flush=True)
     for odd in ["ㅁㄴㅇㄹ", "월급 vs 야근 vs 칼퇴", "가" * 80]:
@@ -667,6 +1116,13 @@ def run_offline(browser, base):
         subs = [shot_value(page, i) for i in range(count)]
         check(f"이상 입력 6컷 유지 ({odd[:8]})", count == 6 and all(len(s.strip()) >= 4 for s in subs), f"{count}컷")
 
+    offline_errors = [e for e in errors if e.startswith("[offline:")]
+    check("데스크톱: 콘솔 에러 0", not offline_errors, str(offline_errors[:2]))
+    context.close()
+
+
+def run_mobile(browser, base):
+    """모바일 390px — 별도 브라우저로 띄웁니다(single-process에서 두 번째 컨텍스트가 죽는 환경 대응)."""
     print("── 모바일 390px", flush=True)
     mob_ctx, mob = new_page(browser, base, "offline-mobile", viewport={"width": 390, "height": 844})
     check("모바일: 가로 넘침 0", no_overflow(mob),
@@ -674,17 +1130,26 @@ def run_offline(browser, base):
     frame_box = mob.locator('[data-testid="shorts-frame"]').bounding_box()
     check("모바일: 플레이어 9:16", frame_box and abs(frame_box["width"] / frame_box["height"] - 9 / 16) < 0.02,
           str(frame_box))
-    check("모바일: 만들기 버튼 보임", mob.locator('[data-testid="generate"]').is_visible())
+    check("모바일: 스테이지 탭 기본", mob.locator('[data-testid="shorts-frame"]').is_visible())
+    check("모바일: 작업 탭 3개",
+          mob.locator('[data-testid="mobile-tab-script"], [data-testid="mobile-tab-stage"], [data-testid="mobile-tab-inspector"]').count() == 3)
+    mob.click('[data-testid="mobile-tab-script"]')
+    mob.wait_for_timeout(250)
+    check("모바일: 대본 탭에서 만들기 보임", mob.locator('[data-testid="generate"]').is_visible())
+    check("모바일: 탭을 바꾸면 스테이지가 숨겨짐", not mob.locator('[data-testid="shorts-frame"]').is_visible())
+    mob.click('[data-testid="mobile-tab-stage"]')
+    mob.wait_for_timeout(250)
+    mob.click('[data-testid="mobile-tab-inspector"]')
+    mob.wait_for_timeout(250)
+    check("모바일: 설정 탭에서 배경음 패널 보임", mob.locator('[data-testid="bgm-trendy"]').is_visible())
+    mob.click('[data-testid="mobile-tab-stage"]')
+    mob.wait_for_timeout(250)
     mob.evaluate("window.scrollTo(0, 0)")
     mob.wait_for_timeout(200)
     clean_shot(mob, os.path.join(SHOTS, "02-mobile.png"))
     mobile_errors = [e for e in errors if e.startswith("[offline-mobile")]
     check("모바일: 콘솔 에러 0", not mobile_errors, str(mobile_errors[:2]))
     mob_ctx.close()
-
-    offline_errors = [e for e in errors if e.startswith("[offline:")]
-    check("데스크톱: 콘솔 에러 0", not offline_errors, str(offline_errors[:2]))
-    context.close()
 
 
 def run_ai(browser, base, port):
@@ -737,7 +1202,7 @@ def run_ai(browser, base, port):
     page.evaluate("window.scrollTo(0, 0)")
     page.click('[data-testid="restart"]')
     page.wait_for_timeout(1400)
-    clean_shot(page, os.path.join(SHOTS, "03-ai.png"))
+    hero_shot(page, os.path.join(SHOTS, "03-ai.png"))
 
     print("── AI 실패 → 내장 엔진 폴백", flush=True)
     page.fill('[data-testid="topic-input"]', "실패 케이스")
@@ -751,6 +1216,142 @@ def run_ai(browser, base, port):
     check("API POST: 6컷 반환", status == 200 and len(payload.get("cuts", [])) == 6, str(payload)[:120])
     status, payload = api(port, "POST", {"topic": "a"})
     check("API POST: 짧은 주제 400", status == 400, str(payload)[:100])
+
+
+    print("── AI 음성(TTS) 서버", flush=True)
+    status, payload = tts_api(port, "")
+    check("TTS GET: 서버 상태", status == 200 and payload.get("provider") == "google-translate", str(payload)[:120])
+    status, payload = tts_api(port, "월급 1.5배 vs 칼퇴, 당신의 선택은?")
+    check("TTS GET: 한국어 음성 응답", status == 200 and (payload.get("bytes") or 0) > 2000,
+          f"status={status} bytes={payload.get('bytes')} type={payload.get('type')}")
+    status, payload = tts_api(port, "월급 1.5배 vs 칼퇴, 당신의 선택은?")
+    check("TTS GET: 같은 문장은 캐시로 즉시 응답", status == 200 and payload.get("cached") is True, str(payload)[:120])
+    status, payload = tts_api(port, "가" * 400)
+    check("TTS GET: 너무 긴 문장 413", status == 413, str(payload)[:120])
+    status, payload = tts_api(port, "   ")
+    check("TTS GET: 빈 문장 400", status == 400, str(payload)[:120])
+
+    open_tab(page, "audio")
+    check("TTS: 서버 음성 배지", wait_until(lambda: "서버 음성" in page.inner_text('[data-testid="tts-status"]'), 10),
+          page.inner_text('[data-testid="tts-status"]')[:80])
+    check("TTS: 6컷 음성 모두 준비", wait_until(lambda: page.get_attribute('[data-testid="tts-status"]', "data-ready") == "6", 20),
+          page.get_attribute('[data-testid="tts-status"]', "data-ready"))
+    with open(os.path.join(ROOT, "scripts/.build/tts-request.json"), encoding="utf-8") as handle:
+        tts_log = json.load(handle)
+    texts = [call.get("text", "") for call in tts_log.get("calls", [])]
+    check("TTS: 서버가 자막을 별표 없이 요청", bool(texts) and all("*" not in text for text in texts), str(texts[:2])[:120])
+    check("TTS: 한국어(ko)로 요청", all(call.get("lang") == "ko" for call in tts_log.get("calls", [])[-3:]))
+
+    page.locator('[aria-label="인스펙터"]').screenshot(path=os.path.join(SHOTS, "07-audio-tts.png"))
+
+    print("── 나레이션 미리보기 믹싱", flush=True)
+    pause_video(page)
+    page.evaluate("window.__shortcutAudio = { voices: 0, ducks: 0, lastVoiceAt: 0 }")
+    page.click('[data-testid="play-toggle"]')
+    check("나레이션: 재생 시작", wait_until(lambda: is_playing(page), 4))
+    check("나레이션: 컷마다 음성이 믹서에 얹힘", wait_until(lambda: audio_stats(page).get("voices", 0) >= 2, 12),
+          str(audio_stats(page)))
+    stats = audio_stats(page)
+    check("나레이션: 음성 구간에 배경음 덕킹", stats.get("ducks", 0) >= 2, str(stats))
+    page.click('[data-testid="play-toggle"]')
+    wait_until(lambda: not is_playing(page), 3)
+    page.click('[data-testid="voice-fast"]')
+    page.wait_for_timeout(400)
+    check("TTS: 보이스 프리셋 변경 반영",
+          wait_until(lambda: page.get_attribute('[data-testid="shorts-frame"]', "data-voice") == "fast", 3),
+          page.get_attribute('[data-testid="shorts-frame"]', "data-voice"))
+
+    print("── 요금제(Free → Pro)", flush=True)
+    check("요금제: 헤더에 현재 플랜(Free)", "Free" in page.inner_text('[data-testid="pricing-open"]'))
+    open_tab(page, "export")
+    pause_video(page)
+    render_at(page, 1.0)
+    free_strip = canvas_strip(page)
+    check("요금제: Free는 1080p가 잠김",
+          page.get_attribute('[data-testid="export-res-1080"]', "data-active") != "true")
+    page.click('[data-testid="pricing-open"]')
+    check("요금제: 요금제 모달 열림", wait_until(lambda: page.locator('[data-testid="pricing"]').count() == 1, 3))
+    check("요금제: 3개 플랜", page.locator('[data-testid^="plan-option-"]').count() == 3)
+    pricing_text = page.inner_text('[data-testid="pricing"]')
+    check("요금제: Pro 월 19,000원", "19,000원" in pricing_text, pricing_text[:80])
+    check("요금제: Team 월 49,000원", "49,000원" in pricing_text, pricing_text[:80])
+    check("요금제: 기능 비교표", "플랫폼 워터마크" in pricing_text and "1080p FHD" in pricing_text)
+    page.click('[data-testid="cycle-annual"]')
+    page.wait_for_timeout(250)
+    check("요금제: 연간 결제 가격(190,000원)", "190,000원" in page.inner_text('[data-testid="pricing"]'),
+          page.inner_text('[data-testid="pricing"]')[:80])
+    page.screenshot(path=os.path.join(SHOTS, "06-pricing.png"))
+    page.click('[data-testid="cycle-monthly"]')
+    page.wait_for_timeout(150)
+    page.click('[data-testid="pricing-activate-pro"]')
+    check("요금제: Pro 체험 활성화", wait_until(lambda: page.locator('[data-testid="pricing"]').count() == 0, 3))
+    check("요금제: 헤더 플랜이 Pro로 바뀜", "Pro" in page.inner_text('[data-testid="pricing-open"]'))
+    saved_plan = page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:plan:v1')||'{}')")
+    check("요금제: 플랜 저장(localStorage)", saved_plan.get("id") == "pro" and saved_plan.get("demo") is True, str(saved_plan))
+    open_tab(page, "audio")
+    check("요금제: Pro는 보이스 4종 잠금 해제",
+          page.get_attribute('[data-testid="voice-calm"]', "data-locked") == "false" and
+          page.get_attribute('[data-testid="voice-low"]', "data-locked") == "false")
+    open_tab(page, "export")
+    page.click('[data-testid="export-res-1080"]')
+    page.wait_for_timeout(200)
+    check("요금제: Pro 1080p 선택 가능", page.get_attribute('[data-testid="export-res-1080"]', "data-active") == "true")
+    pause_video(page)
+    render_at(page, 1.0)
+    pro_strip = canvas_strip(page)
+    mark_band = strip_bright(free_strip)
+    check("요금제: Free는 하단에 플랫폼 표식", mark_band > 0.0015, f"band bright={mark_band:.4f}")
+    gone = pixel_diff(free_strip, pro_strip)
+    check("요금제: Pro는 플랫폼 표식 제거", gone["pct"] > 1.5, str(gone))
+
+    print("── 1080p 나레이션 영상 저장", flush=True)
+    # 문서용 컷 — 대표 프리셋으로 대본을 새로 깔고(음성도 그 문장으로 다시 준비) 저장합니다.
+    page.click('[data-testid="preset-balance-game"]')
+    wait_until(lambda: page.get_attribute('[data-testid="tts-status"]', "data-ready") == "6", 25)
+    ensure_sound_on(page)
+    page.click('[data-testid="shot-jump-0"]')
+    page.wait_for_timeout(400)
+    if is_playing(page):
+        page.click('[data-testid="play-toggle"]')
+    page.evaluate("window.__shortcutAudio = { voices: 0, ducks: 0, lastVoiceAt: 0 }")
+    video_path = None
+    if page.locator('[data-testid="export-video"]').is_enabled():
+        try:
+            with page.expect_download(timeout=120000) as video_info:
+                page.click('[data-testid="export-video"]')
+            video_path = video_info.value.path()
+            record = export_record(page) or {}
+            check("나레이션 영상: 1080×1920 FHD", record.get("width") == 1080 and record.get("height") == 1920, str(record))
+            check("나레이션 영상: 6컷 음성이 영상에 들어감", record.get("narratedCuts") == 6, str(record.get("narratedCuts")))
+            check("나레이션 영상: 오디오가 실제 소리", (record.get("rms") or 0) > 0.02, f"rms={record.get('rms')}")
+            export_stats = audio_stats(page)
+            check("나레이션 영상: 컷마다 덕킹 자동화", export_stats.get("ducks", 0) >= 6, str(export_stats))
+            frame_path = os.path.join(ROOT, "scripts/.build/video-1080.png")
+            ff = subprocess.run(
+                [FFMPEG, "-y", "-threads", "1", "-ss", "1.0", "-i", video_path, "-frames:v", "1", frame_path],
+                capture_output=True, text=True,
+            )
+            if os.path.exists(frame_path):
+                frame = Image.open(frame_path).convert("RGB")
+                check("나레이션 영상: 1080p 프레임", frame.size == (1080, 1920), str(frame.size))
+                mark = region_bright(frame_path, 0.952, 0.982)
+                check("나레이션 영상: Pro는 플랫폼 표식 없음", mark < 0.002, f"mark bright={mark:.4f}")
+                frame.save(os.path.join(SHOTS, "08-export-1080.png"))
+                os.remove(frame_path)
+            else:
+                check("나레이션 영상: 프레임 추출", False, (ff.stderr or "")[-160:])
+            check("나레이션 영상: 파일 크기", os.path.getsize(video_path) > 200000 if video_path else False)
+        except Exception as exc:  # noqa: BLE001
+            check("나레이션 영상: 저장 완료", False, f"{type(exc).__name__}: {str(exc)[:120]}")
+    else:
+        check("나레이션 영상: 저장 가능", False, "button disabled")
+
+    page.click('[data-testid="pricing-open"]')
+    page.wait_for_timeout(250)
+    page.click('[data-testid="pricing-choose-free"]')
+    page.wait_for_timeout(300)
+    savings = page.evaluate("JSON.parse(localStorage.getItem('shortcut-studio:plan:v1')||'{}')")
+    check("요금제: 무료로 되돌리기", savings.get("id") == "free", str(savings))
 
     ai_errors = [e for e in errors if e.startswith("[ai:")]
     check("AI: 콘솔 에러 0", not ai_errors, str(ai_errors[:2]))
@@ -771,6 +1372,11 @@ def run_nokey(browser, base, port):
 
     status, payload = api(port)
     check("API GET: no_key", status == 200 and payload.get("ai") is False and payload.get("reason") == "no_key", str(payload)[:100])
+    status, payload = tts_api(port, "AI 키가 없어도 나레이션은 나옵니다.")
+    check("키 없음: 음성(TTS)은 그대로 동작", status == 200 and (payload.get("bytes") or 0) > 2000, str(payload)[:100])
+    open_tab(page, "audio")
+    check("키 없음: 화면에도 서버 음성 표시", wait_until(lambda: "서버 음성" in page.inner_text('[data-testid="tts-status"]'), 10),
+          page.inner_text('[data-testid="tts-status"]')[:60])
     status, payload = api(port, "POST", {"topic": "테스트 주제"})
     check("API POST: 501 no_key", status == 501 and payload.get("error", {}).get("code") == "no_key", str(payload)[:100])
 
@@ -779,18 +1385,42 @@ def run_nokey(browser, base, port):
     context.close()
 
 
+BROWSER = [None]
+PLAYWRIGHT = [None]
+
+
+def ensure_browser(browser=None):
+    """컨테이너에서 크로미움이 죽었으면 새로 띄웁니다(single-process 모드라 한 번 죽으면 다시 살아나지 않음)."""
+    if browser is not None and browser.is_connected():
+        return browser
+    try:
+        if browser is not None:
+            browser.close()
+    except Exception:  # noqa: BLE001
+        pass
+    fresh = launch_browser(PLAYWRIGHT[0])
+    BROWSER[0] = fresh
+    return fresh
+
+
 def launch_browser(playwright, attempts=8):
     """컨테이너에 다른 작업이 많으면 스레드가 모자라 크로미움이 뜨지 못합니다.
-    잠깐 기다렸다 다시 띄우고, 그래도 안 되면 single-process로 시도합니다."""
+    스레드를 적게 쓰는 single-process부터 시도하고, 잠깐 기다렸다 다시 띄웁니다."""
     last = None
     for attempt in range(attempts):
-        for args in (["--no-sandbox"], ["--no-sandbox", "--single-process", "--disable-gpu"]):
+        for args in (
+            ["--no-sandbox", "--single-process", "--no-zygote", "--disable-gpu"],
+            ["--no-sandbox", "--disable-gpu"],
+        ):
             browser = None
             try:
                 browser = playwright.chromium.launch(args=args)
-                probe = browser.new_page()
-                probe.close()
-                return browser
+                # single-process 모드에서는 빈 프로브 페이지를 닫는 순간 브라우저가 종료되므로
+                # 페이지를 만들지 않고 연결만 확인합니다.
+                time.sleep(1.2)
+                if browser.is_connected():
+                    return browser
+                last = RuntimeError("browser disconnected right after launch")
             except Exception as exc:  # noqa: BLE001
                 last = exc
                 try:
@@ -815,19 +1445,42 @@ def main():
 
     only = sys.argv[1] if len(sys.argv) > 1 else "all"
     plans = [
-        ("offline", "정적 호스팅(서버 없음)", lambda base: run_offline(browser_holder[0], base)),
-        ("ai", "AI 서버", lambda base: run_ai(browser_holder[0], base, 4188)),
-        ("nokey", "키 없는 서버", lambda base: run_nokey(browser_holder[0], base, 4189)),
+        ("offline", "정적 호스팅(서버 없음)", lambda base: run_offline(ensure_browser(BROWSER[0]), base)),
+        ("mobile", "모바일 390px", lambda base: run_mobile(ensure_browser(None), base)),
+        ("ai", "AI 서버", lambda base: run_ai(ensure_browser(BROWSER[0]), base, 4188)),
+        ("nokey", "키 없는 서버", lambda base: run_nokey(ensure_browser(BROWSER[0]), base, 4189)),
     ]
-    ports = {"offline": 4187, "ai": 4188, "nokey": 4189}
+    ports = {"offline": 4187, "mobile": 4187, "ai": 4188, "nokey": 4189}
     browser_holder = [None]
+
+    def run_plan(name, run, base):
+        """컨테이너 사정으로 크로미움이 한 번 죽으면, 아직 아무것도 못 했을 때만 새로 띄워 다시 합니다."""
+        before = len(checks)
+        try:
+            run(base)
+        except Exception as exc:  # noqa: BLE001
+            if len(checks) != before:
+                step(name, lambda: (_ for _ in ()).throw(exc))
+                return
+            try:
+                browser_holder[0].close()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(4)
+            browser_holder[0] = launch_browser(playwright_holder[0])
+            step(name + " (재시도)", lambda: run(base))
+
+    playwright_holder = [None]
     with sync_playwright() as p:
+        playwright_holder[0] = p
+        PLAYWRIGHT[0] = p
         browser_holder[0] = launch_browser(p)
+        BROWSER[0] = browser_holder[0]
         for mode, name, run in plans:
             if only not in ("all", mode):
                 continue
             with serve(mode, ports[mode]) as base:
-                step(name, lambda base=base, run=run: run(base))
+                run_plan(name, run, base)
         browser_holder[0].close()
 
     passed = sum(1 for _, ok, _ in checks if ok)

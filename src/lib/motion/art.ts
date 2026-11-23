@@ -518,6 +518,8 @@ const TEMPLATE_AFFINITY: Record<TemplateId, Partial<Record<ArtGenre, number>>> =
   balance: { office: 3, comic: 2.4, night: 1.2, cafe: 0.8 },
   living: { cozy: 3, nature: 2.2, cafe: 1.8, office: 0.8 },
   love: { cafe: 2.8, rain: 2.6, royal: 2.4, nature: 1.4, night: 0.8 },
+  review: { cafe: 3, cozy: 2.4, nature: 1.6, comic: 1.2, night: 0.8 },
+  issue: { night: 3, office: 2.8, comic: 1.2, cozy: 0.6 },
   it: { night: 3, office: 2.8, comic: 1.2, cozy: 0.6 },
 };
 

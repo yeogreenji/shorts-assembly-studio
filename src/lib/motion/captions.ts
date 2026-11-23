@@ -1,5 +1,6 @@
 import { rgba } from './color';
 import { captionTokens } from '../text';
+import type { BrandCorner, CaptionTheme } from '../../types';
 
 export interface CaptionWord {
   text: string;
@@ -68,6 +69,8 @@ export function drawCaption(
     /** 짧은 CTA 문장은 말풍선에 담습니다. */
     bubble?: boolean;
     opacity?: number;
+    /** 자막 테마 — 임팩트·말풍선·네온·미니멀 */
+    theme?: CaptionTheme;
   },
 ): number {
   const words = splitWords(text);
@@ -75,6 +78,10 @@ export function drawCaption(
   const { accent, fontSize, maxWidth, centerX, bottom, elapsed } = options;
   const duration = Math.max(0.6, options.duration ?? Math.max(2, words.length * 0.45));
   const opacity = options.opacity ?? 1;
+  const theme: CaptionTheme = options.theme ?? 'impact';
+  const useBubble = options.bubble === true || theme === 'bubble';
+  const strokeWidth = theme === 'impact' ? Math.max(6, fontSize * 0.19) : theme === 'minimal' ? Math.max(3, fontSize * 0.08) : 0;
+  const underline = theme === 'impact' || theme === 'neon';
 
   ctx.save();
   ctx.font = captionFont(fontSize);
@@ -101,8 +108,8 @@ export function drawCaption(
   ctx.scale(slam, slam);
   ctx.translate(-centerX, -(bottom - totalHeight));
 
-  // 말풍선(짧은 문장) — 자막 뒤에 둥근 판과 꼬리를 그립니다.
-  if (options.bubble) {
+  // 말풍선(짧은 문장·말풍선 테마) — 자막 뒤에 둥근 판과 꼬리를 그립니다.
+  if (useBubble) {
     const padX = 52;
     const padY = 36;
     const bubbleW = Math.min(maxWidth + padX * 2, widest + padX * 2);
@@ -154,11 +161,11 @@ export function drawCaption(
       const width = widths[index] ?? 0;
       const delay = 0.05 + wordIndex * step;
       const u = clamp01((elapsed - delay) / 0.3);
-      const pop = u <= 0 ? 0 : 0.72 + 0.28 * backOut(u);
+      const pop = u <= 0 ? 0 : theme === 'minimal' ? 0.94 + 0.06 * backOut(u) : 0.72 + 0.28 * backOut(u);
       const land = delay + 0.3;
       const after = Math.max(0, elapsed - land);
       const pulse = word.highlighted ? 1 + 0.05 * Math.sin(after * 13) * Math.exp(-after * 3.4) : 1;
-      const jitter = word.highlighted ? Math.sin(after * 38) * 2.4 * Math.exp(-after * 9) : 0;
+      const jitter = word.highlighted && theme !== 'minimal' ? Math.sin(after * 38) * 2.4 * Math.exp(-after * 9) : 0;
 
       ctx.save();
       ctx.globalAlpha = opacity * clamp01(u * 2.4);
@@ -166,26 +173,41 @@ export function drawCaption(
       ctx.scale(pop * pulse, pop * pulse);
       ctx.font = captionFont(fontSize);
       ctx.textAlign = 'center';
-      ctx.lineWidth = Math.max(6, fontSize * 0.19);
-      ctx.strokeStyle = 'rgba(6, 6, 10, 0.92)';
-      ctx.strokeText(word.text, 0, 0);
-      if (word.highlighted) {
+      if (strokeWidth > 0) {
+        ctx.lineWidth = strokeWidth;
+        ctx.strokeStyle = 'rgba(6, 6, 10, 0.92)';
+        ctx.strokeText(word.text, 0, 0);
+      }
+      if (theme === 'neon') {
+        ctx.shadowColor = rgba(accent, word.highlighted ? 0.9 : 0.55);
+        ctx.shadowBlur = word.highlighted ? 40 : 22;
+      } else if (word.highlighted && theme !== 'minimal') {
         ctx.shadowColor = rgba(accent, 0.75);
         ctx.shadowBlur = 24 + 14 * Math.sin(after * 9);
+      } else if (theme === 'minimal') {
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetY = 3;
       }
       ctx.fillStyle = word.highlighted ? accent : '#ffffff';
       ctx.fillText(word.text, 0, 0);
       ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
       ctx.restore();
 
-      // 강조 단어 밑줄 — 박힌 뒤 왼쪽에서 오른쪽으로 그어집니다.
-      if (word.highlighted && after > 0) {
+      // 강조 단어 밑줄 — 박힌 뒤 왼쪽에서 오른쪽으로 그립니다.
+      if (underline && word.highlighted && after > 0) {
         const grow = clamp01(after / 0.22);
         const barW = width * 0.92 * (0.2 + 0.8 * grow);
         const barY = y + fontSize * 0.56;
         ctx.save();
-        ctx.globalAlpha = opacity * grow * 0.9;
+        ctx.globalAlpha = opacity * grow * (theme === 'neon' ? 0.7 : 0.9);
         ctx.fillStyle = accent;
+        if (theme === 'neon') {
+          ctx.shadowColor = rgba(accent, 0.9);
+          ctx.shadowBlur = 18;
+        }
         ctx.beginPath();
         ctx.roundRect(cursor + width / 2 - barW / 2, barY, barW, Math.max(5, fontSize * 0.08), 6);
         ctx.fill();
@@ -303,5 +325,114 @@ export function drawHud(
   ctx.fill();
   ctx.fillStyle = rgba('#ffffff', 0.82);
   ctx.fillText(`${index + 1}/${count}`, badgeX + badgeW - 19, chipY + badgeH / 2 + 1);
+  ctx.restore();
+}
+
+/**
+ * 브랜드 워터마크 — 채널 핸들(@)과 로고를 화면 구석에 작게 얹습니다.
+ * 자막과 마찬가지로 캔버스에 구워지므로 저장한 영상에도 그대로 남습니다.
+ * 안전 영역(위 116px / 아래 232px) 안쪽에만 놓여 플랫폼 UI에 가리지 않습니다.
+ */
+export function drawBrand(
+  ctx: CanvasRenderingContext2D,
+  options: {
+    handle: string;
+    accent: string;
+    corner: BrandCorner;
+    logo?: HTMLImageElement | null;
+    opacity?: number;
+  },
+): void {
+  const handle = options.handle.trim().replace(/^@+/, '').slice(0, 24);
+  if (!handle) return;
+  const text = `@${handle}`;
+  const opacity = options.opacity ?? 0.94;
+  const logo = options.logo ?? null;
+  const font = (size: number) =>
+    `800 ${size}px Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif`;
+
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  let fontSize = 34;
+  ctx.font = font(fontSize);
+  while (fontSize > 20 && ctx.measureText(text).width > 320) {
+    fontSize -= 2;
+    ctx.font = font(fontSize);
+  }
+  const textW = ctx.measureText(text).width;
+  const logoSize = logo ? 44 : 0;
+  const gap = logo ? 12 : 0;
+  const padX = 20;
+  const chipH = 62;
+  const chipW = padX * 2 + logoSize + gap + textW;
+  const pad = 36;
+  const left = options.corner === 'top-left' || options.corner === 'bottom-left';
+  const top = options.corner === 'top-left' || options.corner === 'top-right';
+  const x = left ? pad : 1080 - pad - chipW;
+  const y = top ? 116 : 1920 - 232;
+
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetY = 6;
+  ctx.fillStyle = 'rgba(8, 7, 12, 0.5)';
+  ctx.beginPath();
+  ctx.roundRect(x, y, chipW, chipH, chipH / 2);
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.strokeStyle = rgba(options.accent, 0.34);
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.roundRect(x, y, chipW, chipH, chipH / 2);
+  ctx.stroke();
+
+  let cursorX = x + padX;
+  if (logo) {
+    const radius = logoSize / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cursorX + radius, y + chipH / 2, radius, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(logo, cursorX, y + (chipH - logoSize) / 2, logoSize, logoSize);
+    ctx.restore();
+    cursorX += logoSize + gap;
+  }
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, cursorX, y + chipH / 2 + 1);
+  ctx.restore();
+}
+
+/**
+ * 플랫폼 워터마크 — Free 요금제 영상 하단에 작게 남는 '숏컷 스튜디오' 표식.
+ * Pro·Team은 이 표식 없이 저장됩니다(브랜드 워터마크는 별개로 사용자가 켜고 끕니다).
+ */
+export function drawPlatformMark(ctx: CanvasRenderingContext2D, options: { opacity?: number } = {}): void {
+  const text = '숏컷 스튜디오';
+  const opacity = options.opacity ?? 0.8;
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  const fontSize = 25;
+  ctx.font = `700 ${fontSize}px Pretendard, "Pretendard Variable", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const textW = ctx.measureText(text).width;
+  const chipW = textW + 44;
+  const chipH = 46;
+  const x = 540 - chipW / 2;
+  const y = 1920 - 96;
+  ctx.fillStyle = 'rgba(6, 8, 12, 0.42)';
+  ctx.beginPath();
+  ctx.roundRect(x, y, chipW, chipH, chipH / 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.roundRect(x, y, chipW, chipH, chipH / 2);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.86)';
+  ctx.fillText(text, 540, y + chipH / 2 + 1);
   ctx.restore();
 }
