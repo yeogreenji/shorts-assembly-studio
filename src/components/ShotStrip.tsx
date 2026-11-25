@@ -21,7 +21,7 @@ const MOVE_LABEL: Record<CameraMove, string> = {
   slide: '슬라이드',
 };
 
-/** 컷 스트립 — 일러스트·자막·길이·음성을 한 줄에서 다듬습니다. */
+/** 컷 스트립 — 일러스트·자막·나레이션·길이·음성을 한 줄에서 다듬습니다. */
 export function ShotStrip({
   studio,
   narration,
@@ -31,48 +31,58 @@ export function ShotStrip({
   narration: NarrationView;
   onVoice: (index: number) => void;
 }) {
-  const { shorts, updateCut, normalizeCut, moveCut, jumpTo, setCutDuration, uploadCutImage, clearCutImage } = studio;
+  const { shorts, updateCut, normalizeCut, setCutVoice, moveCut, jumpTo, setCutDuration, uploadCutImage, clearCutImage } =
+    studio;
   const plan = useMemo(() => buildScenePlan(shorts), [shorts]);
   const last = shorts.cuts.length - 1;
 
   return (
     <section className="surface" aria-labelledby="cuts-heading">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft px-3 py-2">
         <h2 id="cuts-heading" className="flex items-center gap-1.5 text-[12px] font-semibold text-mist-200">
           <Icon name="film" size={13} className="text-mist-500" />
           컷 {shorts.cuts.length}개
+          <span className="ml-1 font-normal text-mist-600">
+            · 나레이션 {narration.chars}자 · {narration.blocks.length}호흡
+          </span>
         </h2>
         <p className="text-[10px] text-mist-600">
-          <span className="text-mist-400">*단어*</span>는 강조색 · 자막은 그대로 음성으로 읽힙니다
+          <span className="text-mist-400">*단어*</span>는 강조 · 자막과 나레이션은 따로 고칩니다
         </p>
       </div>
 
-      <div className="grid gap-2 p-3 sm:grid-cols-2">
-        {shorts.cuts.map((cut, index) => (
-          <ShotCard
-            key={cut.id}
-            cut={cut}
-            index={index}
-            total={shorts.cuts.length}
-            isLast={index === last}
-            artTitle={plan.cuts[index]?.art.title ?? ''}
-            artFile={plan.cuts[index]?.art.file ?? ''}
-            move={plan.cuts[index]?.camera.move ?? 'push'}
-            framing={plan.cuts[index]?.framing ?? 'medium'}
-            template={shorts.template}
-            voiceState={narration.clips[index]?.status ?? 'idle'}
-            voiceSource={narration.source}
-            voiceOn={shorts.audio.narration}
-            onChange={updateCut}
-            onBlur={normalizeCut}
-            onMove={moveCut}
-            onJump={jumpTo}
-            onDuration={setCutDuration}
-            onImage={(id, file) => void uploadCutImage(id, file)}
-            onClearImage={clearCutImage}
-            onVoice={() => onVoice(index)}
-          />
-        ))}
+      <div className="grid gap-1.5 p-2 sm:grid-cols-2">
+        {shorts.cuts.map((cut, index) => {
+          const block = narration.blocks.find((item) => item.cutIndexes.includes(index));
+          return (
+            <ShotCard
+              key={cut.id}
+              cut={cut}
+              index={index}
+              total={shorts.cuts.length}
+              isLast={index === last}
+              artTitle={plan.cuts[index]?.art.title ?? ''}
+              artFile={plan.cuts[index]?.art.file ?? ''}
+              move={plan.cuts[index]?.camera.move ?? 'push'}
+              framing={plan.cuts[index]?.framing ?? 'medium'}
+              template={shorts.template}
+              voiceState={block ? narration.clips[block.index]?.status ?? 'idle' : 'idle'}
+              voiceSource={narration.source}
+              voiceOn={shorts.audio.narration}
+              take={narration.takes[index]}
+              blockLabel={block ? `${block.index + 1}호흡 · ${block.cutIndexes.length}컷` : '—'}
+              onChange={updateCut}
+              onBlur={normalizeCut}
+              onVoiceText={setCutVoice}
+              onMove={moveCut}
+              onJump={jumpTo}
+              onDuration={setCutDuration}
+              onImage={(id, file) => void uploadCutImage(id, file)}
+              onClearImage={clearCutImage}
+              onVoice={() => onVoice(index)}
+            />
+          );
+        })}
       </div>
     </section>
   );
@@ -91,8 +101,11 @@ function ShotCard({
   voiceState,
   voiceSource,
   voiceOn,
+  take,
+  blockLabel,
   onChange,
   onBlur,
+  onVoiceText,
   onMove,
   onJump,
   onDuration,
@@ -112,8 +125,11 @@ function ShotCard({
   voiceState: 'idle' | 'loading' | 'ready' | 'error';
   voiceSource: 'server' | 'speech' | 'none';
   voiceOn: boolean;
+  take?: { seconds: number; kind: 'mic' | 'file'; name: string };
+  blockLabel: string;
   onChange: (id: string, subtitle: string) => void;
   onBlur: (id: string) => void;
+  onVoiceText: (id: string, voice: string) => void;
   onMove: (id: string, direction: -1 | 1) => void;
   onJump: (index: number) => void;
   onDuration: (id: string, seconds: number) => void;
@@ -123,8 +139,9 @@ function ShotCard({
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const customUrl = getImageDataUrl(cut.image?.id);
-  const voiceTone =
-    voiceState === 'ready'
+  const voiceTone = take
+    ? 'text-mint-400'
+    : voiceState === 'ready'
       ? 'text-mint-400'
       : voiceState === 'loading'
         ? 'text-amber-400'
@@ -136,16 +153,16 @@ function ShotCard({
 
   return (
     <div
-      className="group rounded-[10px] border border-line-soft bg-ink-900 p-2 transition hover:border-line"
+      className="group rounded-[8px] border border-line-soft bg-ink-900 p-1.5 transition hover:border-line"
       data-testid={`shot-card-${index}`}
     >
-      <div className="flex gap-2">
+      <div className="flex gap-1.5">
         <button
           type="button"
           onClick={() => onJump(index)}
           data-testid={`shot-jump-${index}`}
           title={`${index + 1}번 컷 · ${artTitle}부터 재생`}
-          className="relative h-[76px] w-[43px] shrink-0 overflow-hidden rounded-[6px] border border-line-soft"
+          className="relative h-[70px] w-[40px] shrink-0 overflow-hidden rounded-[4px] border border-line-soft"
         >
           {customUrl || artFile ? (
             <img
@@ -159,21 +176,19 @@ function ShotCard({
               className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
             />
           ) : null}
-          <span className="absolute left-1 top-1 rounded bg-black/65 px-1 font-mono text-[8px] font-semibold text-mist-100">
+          <span className="absolute left-1 top-1 rounded bg-black/70 px-1 font-mono text-[8px] font-semibold text-mist-100">
             {String(index + 1).padStart(2, '0')}
           </span>
           {customUrl ? (
             <span className="absolute right-1 top-1 rounded bg-mint-500/85 px-1 text-[7px] font-semibold text-ink-950">내 사진</span>
           ) : null}
-          <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent py-0.5 text-center text-[8px] font-medium text-white/85">
-            {roleLabel(index, total, template)}
-          </span>
         </button>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-1">
-            <p className="min-w-0 flex-1 truncate text-[10px] text-mist-500" title={artTitle}>
-              {customUrl ? `내 이미지 · ${cut.image?.name ?? ''}` : artTitle || '일러스트 배정 중'}
+            <p className="min-w-0 flex-1 truncate text-[9px] text-mist-500" title={artTitle}>
+              <span className="text-mist-400">{roleLabel(index, total, template)}</span>
+              <span className="text-mist-600"> · {blockLabel}</span>
             </p>
             <div className="flex shrink-0 gap-0.5">
               <button
@@ -184,7 +199,7 @@ function ShotCard({
                 aria-label={`${index + 1}번째 컷 앞으로`}
                 className="btn btn-quiet h-5 w-5"
               >
-                <Icon name="arrowLeft" size={11} />
+                <Icon name="arrowLeft" size={10} />
               </button>
               <button
                 type="button"
@@ -194,7 +209,7 @@ function ShotCard({
                 aria-label={`${index + 1}번째 컷 뒤로`}
                 className="btn btn-quiet h-5 w-5"
               >
-                <Icon name="arrowRight" size={11} />
+                <Icon name="arrowRight" size={10} />
               </button>
             </div>
           </div>
@@ -205,12 +220,22 @@ function ShotCard({
             onBlur={() => onBlur(cut.id)}
             aria-label={`${index + 1}번째 컷 자막`}
             data-testid={`shot-subtitle-${index}`}
-            placeholder="이 컷에서 할 말 한 줄"
-            maxLength={60}
-            className="field mt-1 h-7 py-1 text-[11px]"
+            placeholder="화면 자막 · 짧게"
+            maxLength={34}
+            className="field mt-1 h-6 py-0.5 text-[11px] font-medium"
+          />
+          <textarea
+            value={cut.voice ?? ''}
+            onChange={(event) => onVoiceText(cut.id, event.target.value)}
+            aria-label={`${index + 1}번째 컷 나레이션`}
+            data-testid={`shot-voice-text-${index}`}
+            placeholder="읽는 문장 · 이웃 컷과 한 호흡으로 (비우면 자막을 읽습니다)"
+            rows={2}
+            maxLength={220}
+            className="field mt-1 resize-none py-0.5 text-[10px] leading-[1.35] text-mist-300"
           />
 
-          <div className="mt-1.5 flex items-center gap-1.5">
+          <div className="mt-1 flex items-center gap-1.5">
             <input
               type="range"
               min={MIN_CUT_SECONDS}
@@ -227,11 +252,11 @@ function ShotCard({
               type="button"
               data-testid={`shot-voice-${index}`}
               onClick={onVoice}
-              title="이 컷 음성 미리 듣기"
+              title={take ? `내 녹음 ${take.seconds.toFixed(1)}초` : '이 컷 음성 미리 듣기'}
               aria-label={`${index + 1}번째 컷 음성 미리 듣기`}
               className={`btn btn-quiet h-5 w-5 ${voiceTone} ${voiceOn ? '' : 'opacity-40'}`}
             >
-              <Icon name="mic" size={11} />
+              <Icon name="mic" size={10} />
             </button>
             <button
               type="button"
@@ -241,7 +266,7 @@ function ShotCard({
               aria-label={`${index + 1}번째 컷 이미지 넣기`}
               className="btn btn-quiet h-5 w-5"
             >
-              <Icon name="image" size={11} />
+              <Icon name="image" size={10} />
             </button>
             {customUrl ? (
               <button
@@ -252,7 +277,7 @@ function ShotCard({
                 aria-label="내 이미지 지우기"
                 className="btn btn-quiet h-5 w-5"
               >
-                <Icon name="close" size={10} />
+                <Icon name="close" size={9} />
               </button>
             ) : null}
             <input
@@ -269,9 +294,10 @@ function ShotCard({
             />
           </div>
 
-          <p className="mt-1 truncate text-[9px] text-mist-600" title={cut.visual?.scene}>
+          <p className="mt-0.5 truncate text-[9px] text-mist-600" title={cut.visual?.scene}>
             {MOVE_LABEL[move]} ·{' '}
             {framing === 'two-shot' ? '두 사람' : framing === 'close' ? '클로즈업' : framing === 'wide' ? '와이드' : '인물'}
+            {take ? ` · 내 목소리 ${take.seconds.toFixed(1)}s` : ''}
           </p>
         </div>
       </div>

@@ -24,7 +24,7 @@ export function Header({
           <div className="flex items-center gap-2">
             <p className="display truncate text-[14px] font-semibold tracking-tight text-mist-100">숏컷 스튜디오</p>
             <span className="rounded border border-line px-1.5 py-[1px] text-[9px] font-semibold tracking-[0.06em] text-mist-500">
-              v8
+              v9
             </span>
           </div>
           <p className="hidden text-[10px] tracking-[0.14em] text-mist-600 sm:block">SHORTS ASSEMBLY STUDIO</p>

@@ -1,6 +1,6 @@
 import type { BrandSettings, CaptionStyle, Shorts, Shot, ShotImage, TemplateId, Tone } from '../../types';
 import { createRng, type Rng } from './rng';
-import { type ArtDef, type ArtExpression, type ArtShot, expressionFromWords, inferTopicGenre, pickArt } from './art';
+import { ARTS, type ArtDef, type ArtExpression, type ArtShot, expressionFromWords, inferTopicGenre, isArtGenre, pickArt } from './art';
 import { brandOf, styleOf } from '../defaults';
 
 /**
@@ -238,7 +238,10 @@ export function buildScenePlan(shorts: Shorts): ScenePlan {
   // 같은 이펙트가 모든 컷에 깔리지 않도록 컷마다 쓸 수 있는 횟수를 정해 둡니다.
   const effectBudget = new Map<EffectId, number>();
   const versus = shorts.template === 'balance';
-  const genreLock = inferTopicGenre(`${shorts.topic} ${shorts.title}`);
+  const inferredGenre = inferTopicGenre(`${shorts.topic} ${shorts.title}`);
+  // 장르를 고정하면 그 장르 그림만 쓰게 되므로, 컷 수를 채울 만큼 그림이 있을 때만 잠급니다.
+  const genrePool = inferredGenre ? ARTS.filter((art) => art.genre === inferredGenre).length : 0;
+  const genreLock = genrePool >= shorts.cuts.length + 2 ? inferredGenre : null;
 
   const cuts: CutScene[] = shorts.cuts.map((shot, index) => {
     starts.push(acc);
@@ -261,6 +264,7 @@ export function buildScenePlan(shorts: Shorts): ScenePlan {
       previous,
       versus: versus && (shot.role === 'hook' || shot.role === 'cta' || index === 3),
       genreLock,
+      preferGenre: shot.visual?.genre && isArtGenre(shot.visual.genre) ? shot.visual.genre : undefined,
     });
     usedIds.add(picked.id);
     previous = picked;

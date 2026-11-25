@@ -14,7 +14,7 @@ export function serverLabel(state: ServerState): string {
 }
 
 export function serverDetail(state: ServerState): string {
-  if (state.state === 'ai') return '주제에 맞춰 AI가 6컷을 새로 씁니다.';
+  if (state.state === 'ai') return '주제에 맞춰 AI가 8~12컷 완성형 대본을 씁니다.';
   if (state.state === 'local' && state.reason === 'no_key') return 'AI 키가 설정되면 서버에서 새 대본을 씁니다. 지금은 내장 엔진이 바로 만듭니다.';
-  return '내장 엔진이 바로 만듭니다. 서버를 붙이면 AI 대본으로 바뀝니다.';
+  return '내장 엔진이 10컷 완성형 대본을 바로 만듭니다. 서버를 붙이면 AI 대본으로 바뀝니다.';
 }

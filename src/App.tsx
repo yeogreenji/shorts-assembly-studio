@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShorts } from './hooks/useShorts';
 import { useNarration } from './hooks/useNarration';
 import { usePlan, limitsOf } from './lib/plan';
@@ -13,7 +13,9 @@ import { Icon } from './components/Icon';
 import { buildScenePlan } from './lib/motion/scene';
 import { hydrateImages } from './lib/customArt';
 import { previewVoice } from './lib/audio/previewVoice';
-import { loadClips } from './lib/audio/tts';
+import { loadClips, setTtsStyle } from './lib/audio/tts';
+import { fitCutDurations } from './lib/audio/narration';
+import { hydrateTakes, pruneTakes } from './lib/audio/takes';
 
 type MobileView = 'script' | 'stage' | 'inspector';
 
@@ -27,17 +29,50 @@ export default function App() {
   const [tab, setTab] = useState<InspectorTab>('audio');
   const [view, setView] = useState<MobileView>('stage');
   const [pricingOpen, setPricingOpen] = useState(false);
+  const fitSignature = useRef('');
 
   // 저장해 둔 내 이미지를 캔버스 창고에 올립니다(새로고침해도 내 사진 컷이 그대로).
   useEffect(() => {
     hydrateImages();
   }, []);
 
-  // 대본이 바뀌면 6컷 음성을 미리 받아 둡니다(플레이 전에 도착해 있게).
+  // 대본이 바뀌면 나레이션 블록 음성을 미리 받아 둡니다(플레이 전에 도착해 있게).
   useEffect(() => {
     if (!shorts.audio.narration) return;
-    void loadClips(narration.texts, narration.voice);
-  }, [narration.texts, narration.voice, shorts.audio.narration]);
+    void loadClips(narration.blocks.map((block) => block.text), narration.voice);
+  }, [narration.blocks, narration.voice, shorts.audio.narration]);
+
+  // 서버에 화자 스타일을 알려 줍니다(OpenAI 음성일 때 말투 지시로 쓰입니다).
+  useEffect(() => {
+    setTtsStyle(shorts.audio.delivery);
+  }, [shorts.audio.delivery]);
+
+  // 직접 녹음해 둔 목소리를 되살립니다(새로고침 뒤에도 남아 있게).
+  const cutIds = useMemo(() => shorts.cuts.map((cut) => cut.id).join('|'), [shorts.cuts]);
+  useEffect(() => {
+    const ids = shorts.cuts.map((cut) => cut.id);
+    pruneTakes(ids);
+    void hydrateTakes(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cutIds]);
+
+  /**
+   * 나레이션 길이에 컷 길이를 자동으로 맞춥니다 —
+   * 컷이 음성보다 짧아 말이 잘리거나, 길어서 화면이 멈춰 보이는 일을 없앱니다.
+   */
+  useEffect(() => {
+    if (!shorts.audio.autoFit || shorts.audio.voiceSource !== 'ai' || !shorts.audio.narration) return;
+    if (!narration.blocks.length) return;
+    if (narration.clips.some((clip) => clip.status !== 'ready')) return;
+    const rate = Math.max(0.5, narration.preset.rate * narration.delivery.rate * shorts.audio.voiceRate);
+    const signature = `${narration.voice}|${rate.toFixed(2)}|${narration.blocks.map((block) => block.text).join('§')}`;
+    if (fitSignature.current === signature) return;
+    fitSignature.current = signature;
+    const seconds = narration.clips.map((clip) => (clip.seconds || 0) / rate);
+    const durations = fitCutDurations(shorts.cuts, narration.blocks, seconds);
+    if (durations) studio.setCutDurations(durations);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narration.clips, narration.voice, narration.preset.rate, narration.delivery.rate, shorts.audio.autoFit, shorts.audio.voiceRate, shorts.audio.narration, shorts.audio.voiceSource]);
 
   // 음성이 서버에서 오지 못하면(정적 호스팅) 화면이 조용히 브라우저 음성으로 넘어가도록 한 번만 알립니다.
   useEffect(() => {
@@ -52,7 +87,6 @@ export default function App() {
       <Header saved={studio.saved} plan={plan} server={studio.server} onPricing={() => setPricingOpen(true)} />
 
       <main className="mx-auto w-full max-w-[1560px] px-2.5 pb-8 pt-2.5 sm:px-4 sm:pt-4">
-        {/* 모바일 — 한 번에 한 패널 */}
         <div className="seg mb-2.5 lg:hidden" role="group" aria-label="작업 영역">
           {(
             [
@@ -74,14 +108,14 @@ export default function App() {
           ))}
         </div>
 
-        <div className="grid gap-2.5 lg:grid-cols-[minmax(260px,296px)_minmax(0,1fr)_minmax(300px,344px)] lg:items-start lg:gap-3">
+        <div className="grid gap-2.5 lg:grid-cols-[minmax(260px,300px)_minmax(0,1fr)_minmax(300px,352px)] lg:items-start lg:gap-3">
           {/* 왼쪽 — 대본·프리셋 */}
-          <div className={`${view === 'script' ? 'min-w-0 space-y-2.5' : 'hidden'} lg:block lg:space-y-3 lg:sticky lg:top-[68px] lg:max-h-[calc(100dvh-80px)] lg:overflow-y-auto lg:pr-0.5`}>
+          <div className={`${view === 'script' ? 'min-w-0 space-y-2.5' : 'hidden'} lg:block lg:space-y-3 lg:sticky lg:top-[60px] lg:max-h-[calc(100dvh-72px)] lg:overflow-y-auto lg:pr-0.5`}>
             <TopicPanel studio={studio} />
             <ProjectPanel studio={studio} />
           </div>
 
-          {/* 가운데 — 스테이지 + 컷 */}
+          {/* 가운데 — 스테이지 + 타임라인 + 컷 */}
           <div className={`${view === 'stage' ? 'min-w-0 space-y-2.5' : 'hidden'} lg:block lg:space-y-3`}>
             <section className="surface" aria-labelledby="stage-heading">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft px-3 py-2">
@@ -98,11 +132,13 @@ export default function App() {
               <div className="flex justify-center px-2 py-3 sm:px-3">
                 <ShortsPlayer
                   shorts={shorts}
+                  narration={narration}
                   playNonce={studio.playNonce}
                   seekRequest={studio.seekRequest}
                   motion={studio.motion}
                   onMotion={studio.setMotion}
                   onAudio={studio.setAudio}
+                  onSeek={studio.jumpTo}
                   platformMark={limits.platformMark}
                 />
               </div>
@@ -122,7 +158,7 @@ export default function App() {
           </div>
 
           {/* 오른쪽 — 인스펙터 */}
-          <div className={`${view === 'inspector' ? 'min-w-0' : 'hidden'} lg:block lg:sticky lg:top-[68px] lg:max-h-[calc(100dvh-80px)] lg:overflow-y-auto lg:pr-0.5`}>
+          <div className={`${view === 'inspector' ? 'min-w-0' : 'hidden'} lg:block lg:sticky lg:top-[60px] lg:max-h-[calc(100dvh-72px)] lg:overflow-y-auto lg:pr-0.5`}>
             <Inspector
               studio={studio}
               narration={narration}
@@ -136,7 +172,7 @@ export default function App() {
 
         <p className="mx-auto mt-4 max-w-3xl text-center text-[10px] leading-relaxed text-mist-600">
           대본·이미지·영상은 브라우저 안에서만 처리되고 서버에 저장되지 않습니다(AI 대본을 켠 경우에만 주제 문장이,
-          나레이션을 켠 경우에만 컷 자막이 음성 생성을 위해 전달됩니다). 그림은 웹툰·로맨스 판타지 일러스트 31장에서
+          나레이션을 켠 경우에만 나레이션 문장이 음성 생성을 위해 전달됩니다). 그림은 웹툰·로맨스 판타지 일러스트 31장에서
           컷마다 새로 배정되고, 내 사진을 올린 컷은 얼굴은 그대로 두고 머리카락·옷자락·배경이 미세하게 흔들리는 2.5D
           워프로 움직입니다.
         </p>

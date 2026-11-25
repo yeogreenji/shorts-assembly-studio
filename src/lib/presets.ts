@@ -4,7 +4,7 @@ import { DEFAULT_AUDIO, DEFAULT_BRAND } from './defaults';
 
 /**
  * 원클릭 상용 템플릿 — 한 번 누르면 대본·컷 길이·자막 톤·배경음까지 끝난 상태로 재생됩니다.
- * (그림은 31장 일러스트 라이브러리에서 주제에 맞춰 새로 배정됩니다)
+ * (그림은 31장 일러스트 라이브러리에서 대본의 장면에 맞춰 새로 배정됩니다)
  */
 
 export interface CommercialPreset {
@@ -21,8 +21,6 @@ export interface CommercialPreset {
   title: string;
   topic: string;
   banner: string;
-  durations: number[];
-  lines: string[];
 }
 
 export const PRESETS: CommercialPreset[] = [
@@ -30,7 +28,7 @@ export const PRESETS: CommercialPreset[] = [
     id: 'balance-game',
     label: '직장인 밸런스 게임',
     emoji: '⚖️',
-    tagline: '출근길 3초에 손가락을 멈추는 A/B',
+    tagline: '출근길 3초에 손가락을 멈추는 10컷 A/B',
     goal: '댓글·투표 유도',
     template: 'balance',
     tone: 'cider',
@@ -39,21 +37,12 @@ export const PRESETS: CommercialPreset[] = [
     title: '월급 1.5배 vs 칼퇴',
     topic: '월급 1.5배 vs 칼퇴',
     banner: '직장인 밸런스',
-    durations: [2.8, 3.0, 3.0, 3.0, 2.9, 3.0],
-    lines: [
-      '월급 *1.5배* vs *칼퇴*, 딱 하나만',
-      '1번. 월급 *1.5배*, 대신 밤 9시 퇴근',
-      '주말에도 *단톡방*이 따라옵니다',
-      '2번. *칼퇴* 보장, 월급은 3년째 동결',
-      '점심 먹는데 팀장이 "*바쁘지?*"',
-      '댓글로 *1번*이야 *2번*이야',
-    ],
   },
   {
     id: 'love-story',
     label: '연애 썰',
     emoji: '💌',
-    tagline: '읽다가 내 얘기 같아지는 6컷',
+    tagline: '읽다가 내 얘기 같아지는 10컷',
     goal: '댓글·공유 유도',
     template: 'love',
     tone: 'empathy',
@@ -62,15 +51,6 @@ export const PRESETS: CommercialPreset[] = [
     title: '소개팅 첫 카톡',
     topic: '소개팅 첫 카톡 예시',
     banner: '연애 썰',
-    durations: [3.0, 3.2, 3.0, 3.0, 3.0, 3.2],
-    lines: [
-      '첫 카톡, *이 한 줄*이면 대화가 열려요',
-      '"오늘 *뭐 먹었어요*?" 이거 하나면 돼요',
-      '답장은 *속도*보다 *내용*이에요',
-      '이모티콘은 *한 개*면 충분해요',
-      '약속은 *내가* 먼저 잡으면 돼요',
-      '너무 *애쓰지* 않아도 괜찮아요',
-    ],
   },
   {
     id: 'review',
@@ -85,15 +65,6 @@ export const PRESETS: CommercialPreset[] = [
     title: '줄 서는 브런치 카페 후기',
     topic: '요즘 줄 서는 브런치 카페 솔직 후기',
     banner: '솔직 리뷰',
-    durations: [2.8, 3.0, 3.0, 3.0, 2.9, 3.2],
-    lines: [
-      '웨이팅 *40분* 하고 먹은 브런치, 솔직히',
-      '*플레이팅*은 사진보다 예뻤어요',
-      '대신 *커피*는 평범, 6천원',
-      '*리코타* 토스트가 진짜 주인공',
-      '주말 *11시 전*이면 대기 없어요',
-      '가실 거면 *평일 오전* 추천해요',
-    ],
   },
   {
     id: 'issue-60',
@@ -108,15 +79,6 @@ export const PRESETS: CommercialPreset[] = [
     title: '이번 주 이슈 세 줄 요약',
     topic: '이번 주 IT 이슈 세 줄 요약',
     banner: '이슈 요약',
-    durations: [7.5, 9.5, 9.5, 9.5, 9.5, 9.5],
-    lines: [
-      '이번 주 *세 줄*, 1분이면 끝납니다',
-      '첫째. AI 기능은 *요금제*로 재편 — 무료 범위가 줄었습니다',
-      '둘째. 앱은 *로그인*부터 줄이는 중 — 비회원 체험이 기본',
-      '셋째. 보안은 *패스키*로 이동 — 비밀번호 입력이 사라집니다',
-      '결론. *지켜볼 것* 세 가지, 요금·로그인·보안',
-      '저장해두면 *다음 주*에도 통합니다',
-    ],
   },
 ];
 
@@ -143,10 +105,5 @@ export function buildPresetShorts(preset: CommercialPreset): Shorts {
     audio: { ...DEFAULT_AUDIO, mood: preset.mood },
     style: { ...preset.style },
     brand: { ...DEFAULT_BRAND },
-    cuts: base.cuts.map((cut, index) => ({
-      ...cut,
-      subtitle: preset.lines[index] ?? cut.subtitle,
-      duration: preset.durations[index] ?? cut.duration,
-    })),
   };
 }

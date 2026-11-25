@@ -1,5 +1,5 @@
 import type { CutVisual, Shorts, Shot, TemplateId, Tone } from '../types';
-import { TEMPLATE_MAP, roleOf } from './templates';
+import { MAX_CUTS, MIN_CUTS, TEMPLATE_MAP, roleOf } from './templates';
 import { clampText, normalizeMarks } from './text';
 import { newSeed } from './motion/rng';
 import { BGM_BY_TEMPLATE, DEFAULT_AUDIO, DEFAULT_BRAND, DEFAULT_STYLE } from './defaults';
@@ -67,6 +67,9 @@ interface AiCut {
   role?: string;
   emoji?: string;
   subtitle?: string;
+  /** 읽는 문장 — 자막보다 길어도 됩니다(호흡 블록으로 이어 읽힘) */
+  voice?: string;
+  narration?: string;
   duration?: number;
   visual?: Record<string, unknown>;
 }
@@ -108,27 +111,35 @@ function toVisual(raw: unknown): CutVisual | undefined {
 }
 
 function toShots(cuts: AiCut[]): Shot[] | null {
-  if (cuts.length !== 6) return null;
+  if (cuts.length < MIN_CUTS || cuts.length > MAX_CUTS) return null;
   const stamp = Date.now().toString(36);
+  const total = cuts.length;
   const shots: Shot[] = [];
-  for (let index = 0; index < cuts.length; index += 1) {
+  for (let index = 0; index < total; index += 1) {
     const cut = cuts[index];
-    const subtitle = clampText(normalizeMarks(String(cut?.subtitle ?? '').replace(/\s+/g, ' ')), 46);
+    const subtitle = clampText(normalizeMarks(String(cut?.subtitle ?? '').replace(/\s+/g, ' ')), 30);
     if (subtitle.length < 4) return null;
+    const voice = clampText(String(cut?.voice ?? cut?.narration ?? '').replace(/\s+/g, ' ').trim(), 220);
     const duration = Number(cut?.duration);
     shots.push({
       id: `cut-${stamp}-${index}`,
-      role: roleOf(index),
+      role: roleOf(index, total),
       emoji: clampText(String(cut?.emoji ?? '').trim(), 4) || '✨',
       subtitle,
-      duration: Number.isFinite(duration) ? Math.min(3.6, Math.max(2.2, duration)) : 3,
+      voice: voice || undefined,
+      duration: Number.isFinite(duration) ? Math.min(9.5, Math.max(1.6, duration)) : 4.2,
       visual: toVisual(cut?.visual),
     });
+  }
+  // 쇼츠 한도(60초)에 맞춰 비율대로 줄입니다.
+  const seconds = shots.reduce((sum, shot) => sum + shot.duration, 0);
+  if (seconds > 59) {
+    for (const shot of shots) shot.duration = Math.max(1.6, Math.round((shot.duration * 59) / seconds * 10) / 10);
   }
   return shots;
 }
 
-/** 서버 AI에게 6컷 대본을 받아옵니다. 실패하면 예외를 던지고, 호출한 쪽이 내장 엔진으로 넘어갑니다. */
+/** 서버 AI에게 8~12컷 완성형 대본을 받아옵니다. 실패하면 예외를 던지고, 호출한 쪽이 내장 엔진으로 넘어갑니다. */
 export async function requestAiShorts(input: AiInput, timeoutMs = 22000): Promise<Shorts> {
   const { controller, done } = withTimeout(timeoutMs);
   try {

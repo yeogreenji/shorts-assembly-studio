@@ -8,6 +8,7 @@ import { buildScenePlan } from '../lib/motion/scene';
 import { exportFormats, exportVideo, ExportCanceled, isVideoExportSupported, type ExportStage } from '../lib/motion/record';
 import type { MotionLevel } from '../lib/motion/stage';
 import { ensureClip, voiceOf } from '../lib/audio/tts';
+import { getTake } from '../lib/audio/takes';
 import { limitsOf, usePlan } from '../lib/plan';
 import { Icon } from './Icon';
 
@@ -46,6 +47,7 @@ export function ExportPanel({
   const height = res === '1080' ? 1920 : 1280;
   const width = res === '1080' ? 1080 : 720;
   const silent = audio.mood === 'off' || audio.muted;
+  const rate = Math.max(0.5, narration.preset.rate * narration.delivery.rate * audio.voiceRate);
 
   const handleCopy = async (kind: 'script' | 'guide') => {
     setBusy(kind);
@@ -58,12 +60,45 @@ export function ExportPanel({
     );
   };
 
+  /** 저장용 나레이션 트랙 — 호흡 블록(또는 내 목소리)을 영상 시각에 맞춰 놓습니다. */
   const prepareNarration = async () => {
     if (!audio.narration || audio.muted) return [];
-    const clips = await Promise.all(narration.texts.map((text) => ensureClip(text, narration.voice)));
+    if (audio.voiceSource === 'mine') {
+      return shorts.cuts
+        .map((cut, index) => {
+          const take = getTake(cut.id);
+          if (!take) return null;
+          return {
+            start: starts[index] ?? 0,
+            buffer: take.buffer,
+            maxSeconds: cut.duration + 0.25,
+            rate: 1,
+            tone: 0,
+            raw: true,
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    }
+    const clips = await Promise.all(narration.blocks.map((block) => ensureClip(block.text, narration.voice)));
     return clips
-      .map((clip, index) => (clip.buffer ? { start: starts[index] ?? 0, buffer: clip.buffer } : null))
-      .filter((item): item is { start: number; buffer: AudioBuffer } => Boolean(item));
+      .map((clip, index) => {
+        const block = narration.blocks[index];
+        if (!clip.buffer || !block) return null;
+        const first = block.cutIndexes[0] ?? 0;
+        const last = block.cutIndexes[block.cutIndexes.length - 1] ?? first;
+        const end = starts[last + 1] ?? total;
+        // 첫 호흡은 컷 시작과 함께, 다음 호흡부터는 호흡 길이만큼 살짝 띄웁니다.
+        const start = (starts[first] ?? 0) + (index === 0 ? 0 : audio.breath);
+        return {
+          start,
+          buffer: clip.buffer,
+          maxSeconds: Math.max(0.4, end - (starts[first] ?? 0) + 0.3),
+          rate: rate,
+          tone: audio.voiceTone,
+          raw: false,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
   };
 
   const handleVideo = async () => {
@@ -86,9 +121,10 @@ export function ExportPanel({
         narration: tracks.length
           ? {
               preset: voiceOf(narration.voice),
-              tracks: tracks.map((item) => ({ start: item.start, buffer: item.buffer })),
+              tracks,
               gain: audio.voiceVolume,
               speed: audio.voiceRate,
+              tone: audio.voiceTone,
               ducking: audio.ducking,
             }
           : null,
@@ -112,7 +148,7 @@ export function ExportPanel({
       downloadBlob(`${base}.${extension}`, result.blob);
       const sound =
         result.narratedCuts > 0
-          ? `나레이션 ${result.narratedCuts}컷 + 배경음`
+          ? `나레이션 ${result.narratedCuts}호흡 + 배경음`
           : result.withAudio
             ? '배경음'
             : '무음';
@@ -248,7 +284,13 @@ export function ExportPanel({
         <p className="text-[10px] leading-relaxed text-mist-600">
           {videoReady
             ? `그림 움직임·자막·워터마크·나레이션까지 그대로 9:16 영상으로 녹화합니다. ${
-                silent ? '지금은 무음으로 저장됩니다.' : audio.narration ? 'AI 음성과 배경음이 함께 들어갑니다.' : '배경음이 함께 들어갑니다.'
+                silent
+                  ? '지금은 무음으로 저장됩니다.'
+                  : audio.narration
+                    ? audio.voiceSource === 'mine'
+                      ? '내 목소리와 배경음이 함께 들어갑니다.'
+                      : 'AI 음성과 배경음이 함께 들어갑니다.'
+                    : '배경음이 함께 들어갑니다.'
               }`
             : '영상 저장은 크롬·엣지에서 됩니다. 지금은 대본·자막·가이드로 꺼낼 수 있어요.'}
         </p>
@@ -267,7 +309,11 @@ export function ExportPanel({
           <li className="flex items-center justify-between">
             <span>나레이션</span>
             <span className={audio.narration ? 'text-mist-300' : ''}>
-              {audio.narration ? `${narration.ready}/${narration.total}컷 · ${voiceOf(narration.voice).label}` : '꺼짐'}
+              {audio.narration
+                ? audio.voiceSource === 'mine'
+                  ? `내 목소리 ${narration.takesCount}/${shorts.cuts.length}컷`
+                  : `${narration.ready}/${narration.total}호흡 · ${narration.delivery.label}`
+                : '꺼짐'}
             </span>
           </li>
           <li className="flex items-center justify-between">

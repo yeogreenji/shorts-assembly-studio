@@ -60,9 +60,9 @@ export function buildScript(shorts: Shorts): string {
   const starts = cutStartTimes(shorts.cuts);
   shorts.cuts.forEach((cut, index) => {
     const start = starts[index] ?? 0;
-    lines.push(`#${index + 1} [${start.toFixed(1)}s~${(start + cut.duration).toFixed(1)}s] ${roleLabel(index, shorts.cuts.length)} ${cut.emoji}`);
+    lines.push(`#${index + 1} [${start.toFixed(1)}s~${(start + cut.duration).toFixed(1)}s] ${roleLabel(index, shorts.cuts.length)}`);
     lines.push(`  자막: ${stripMarks(cut.subtitle)}`);
-    lines.push(`  읽기: ${narrationOf(cut)}`);
+    lines.push(`  나레이션: ${narrationOf(cut)}`);
     lines.push('');
   });
   lines.push(`마지막 자막에 "${shorts.banner}" 라벨을 고정해 두면 시리즈로 묶입니다.`);
@@ -90,6 +90,7 @@ export function buildGuide(shorts: Shorts): string {
     lines.push(`   화면: ${cut.emoji} ${scene?.label ?? sceneNote(shorts.template, index)}`);
     lines.push(`   카메라: ${cut.visual?.camera ?? cameraFor(index)} (${cameraFor(index)})`);
     lines.push(`   자막: ${stripMarks(cut.subtitle)}`);
+    lines.push(`   나레이션: ${narrationOf(cut)}`);
     lines.push('');
   });
   lines.push(`업로드 팁: 첫 2초 안에 훅 자막이 떠야 이탈이 줄어듭니다. ${template.banner} 라벨을 유지하면 시리즈로 인식됩니다.`);

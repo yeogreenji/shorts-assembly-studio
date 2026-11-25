@@ -8,7 +8,8 @@ const KEY = 'shortcut-studio:shorts:v2';
 function isShorts(value: unknown): value is Shorts {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<Shorts>;
-  if (!Array.isArray(record.cuts) || record.cuts.length !== 6) return false;
+  // 6컷(v7 이전 저장분)부터 12컷(완성형 대본)까지 읽습니다.
+  if (!Array.isArray(record.cuts) || record.cuts.length < 6 || record.cuts.length > 12) return false;
   if (!TEMPLATE_MAP[record.template as TemplateId]) return false;
   return record.cuts.every(
     (cut) => cut && typeof cut.subtitle === 'string' && typeof cut.duration === 'number' && typeof cut.emoji === 'string',
@@ -21,7 +22,13 @@ export function normalizeShorts(value: unknown): Shorts | null {
   const parsed = value as Shorts;
   return withDefaults({
     ...parsed,
-    cuts: parsed.cuts.map((cut, index) => ({ ...cut, role: roleOf(index), id: cut.id || `cut-${index}` })),
+    cuts: parsed.cuts.map((cut, index, list) => ({
+      ...cut,
+      role: roleOf(index, list.length),
+      duration: Math.max(0.8, Math.min(12, Number(cut.duration) || 3)),
+      voice: typeof cut.voice === 'string' ? cut.voice : undefined,
+      id: cut.id || `cut-${index}`,
+    })),
   });
 }
 

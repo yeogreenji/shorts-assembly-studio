@@ -12,9 +12,17 @@ import type { VoicePreset } from '../audio/tts';
 export type ExportStage = 'prepare' | 'record' | 'finalize';
 
 export interface NarrationTrack {
-  /** 컷이 시작하는 시각(초) */
+  /** 이 조각이 시작하는 영상 시각(초) */
   start: number;
   buffer: AudioBuffer;
+  /** 이 조각을 재생할 최대 길이 — 컷·호흡 창을 넘겨 겹치지 않게 */
+  maxSeconds?: number;
+  /** 트랙별 배속(없으면 전체 speed) */
+  rate?: number;
+  /** 트랙별 톤(센트) */
+  tone?: number;
+  /** 내 목소리 트랙은 프리셋·톤 처리를 하지 않습니다 */
+  raw?: boolean;
 }
 
 export interface NarrationExport {
@@ -24,6 +32,8 @@ export interface NarrationExport {
   gain?: number;
   /** 프리셋 위에 거는 속도 배율 */
   speed?: number;
+  /** 목소리 톤(센트) */
+  tone?: number;
   /** 음성 구간에 배경음을 낮출지 */
   ducking?: boolean;
 }
@@ -184,12 +194,16 @@ export async function exportVideo(plan: ScenePlan, options: VideoExportOptions =
     const anchor = bgmStarted && bgm ? bgm.startTime : mix.now + 0.06;
     if (wantVoice && narration) {
       for (const track of narration.tracks) {
+        const raw = track.raw === true;
         const played = mix.playVoice(track.buffer, narration.preset, anchor + track.start, {
-          rate: narration.speed ?? 1,
+          rate: track.rate ?? narration.speed ?? 1,
+          tone: track.tone ?? narration.tone ?? 0,
           gain: narration.gain ?? 1,
           duck: narration.ducking !== false && bgmStarted,
-          lowShelf: narration.preset.lowShelf,
-          lowpass: narration.preset.lowpass,
+          maxSeconds: track.maxSeconds,
+          lowShelf: raw ? undefined : narration.preset.lowShelf,
+          lowpass: raw ? undefined : narration.preset.lowpass,
+          warmth: raw ? 0.6 : narration.preset.warmth + 1.2,
         });
         if (played) narratedCuts += 1;
       }

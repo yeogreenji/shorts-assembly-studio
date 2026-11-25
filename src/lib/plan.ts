@@ -39,7 +39,7 @@ export const PLANS: PlanDef[] = [
   {
     id: 'free',
     name: 'Free',
-    tagline: '처음 만드는 6컷 · 기능 확인용',
+    tagline: '처음 만드는 쇼츠 · 기능 확인용',
     monthly: 0,
     annual: 0,
     accent: 'muted',

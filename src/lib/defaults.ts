@@ -9,9 +9,14 @@ export const DEFAULT_AUDIO: AudioSettings = {
   accents: true,
   narration: true,
   voice: 'clear',
+  delivery: 'story',
   voiceRate: 1,
-  voiceVolume: 0.9,
+  voiceTone: -15,
+  voiceVolume: 0.92,
+  breath: 0.3,
   ducking: true,
+  autoFit: true,
+  voiceSource: 'ai',
 };
 
 export const DEFAULT_STYLE: CaptionStyle = {

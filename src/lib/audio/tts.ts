@@ -1,16 +1,17 @@
 import type { VoiceId } from '../../types';
 
 /**
- * 나레이션 — 서버(/api/tts)가 만든 한국어 음성을 브라우저에서 AudioBuffer로 풀어 씁니다.
+ * 나레이션 음성 — 서버(/api/tts)가 만든 한국어 음성을 브라우저에서 AudioBuffer로 풀어 씁니다.
  *
- *  · 컷마다 한 조각(자막 한 줄) → 미리보기와 영상 저장이 같은 버퍼를 씁니다
- *  · 보이스 프리셋 4종: 서버 음성 한 가지를 배속·톤으로 갈라 차분/또렷/빠른/낮은 톤을 만듭니다
- *  · 서버가 없으면(정적 호스팅) 브라우저 음성(Web Speech)으로 미리보기만 이어 갑니다 — 영상에는 안 들어감
+ *  · 한 번에 한 '호흡 블록'(2~4컷을 이어 붙인 문장)을 요청합니다 → 문장이 뚝뚝 끊기지 않습니다
+ *  · 서버는 Google 번역 음성을 기본으로 쓰고, OPENAI_API_KEY·ELEVENLABS_API_KEY가 있으면
+ *    더 자연스러운 음성을 자동으로 고릅니다(provider=auto). 없으면 그대로 Google로 돕니다.
+ *  · 서버가 아예 없으면(정적 호스팅) 브라우저 음성으로 미리보기만 이어 갑니다 — 영상에는 안 들어감
  */
 
 export const TTS_ENDPOINT = '/api/tts';
-const CACHE_KEY = 'shortcut-studio:tts-cache:v1';
-const CLIENT_CACHE_LIMIT = 60;
+const CACHE_KEY = 'shortcut-studio:tts-cache:v2';
+const CLIENT_CACHE_LIMIT = 48;
 
 export interface VoicePreset {
   id: VoiceId;
@@ -22,6 +23,8 @@ export interface VoicePreset {
   lowShelf?: number;
   /** 낮은 톤용 고역 정리(Hz) */
   lowpass?: number;
+  /** 음성에 더하는 온기(중저역, dB) — 로봇 같은 건조함을 줄입니다 */
+  warmth: number;
   /** 무료 플랜에서 쓸 수 있는지 */
   free: boolean;
 }
@@ -32,30 +35,34 @@ export const VOICES: VoicePreset[] = [
     label: '또렷한 기본',
     hint: '정보 전달형 · 자막을 정확히 읽는 톤',
     rate: 1,
+    warmth: 1,
     free: true,
   },
   {
     id: 'fast',
     label: '빠른 숏폼',
-    hint: '쇼츠 리듬 · 조금 높고 빠르게',
-    rate: 1.14,
+    hint: '쇼츠 리듬 · 조금 빠르고 경쾌하게',
+    rate: 1.1,
+    warmth: 0.6,
     free: true,
   },
   {
     id: 'calm',
     label: '차분한 나레이션',
     hint: '브이로그 · 낮고 느린 톤',
-    rate: 0.92,
-    lowpass: 7800,
+    rate: 0.93,
+    lowpass: 8200,
+    warmth: 1.8,
     free: false,
   },
   {
     id: 'low',
     label: '낮은 남성 톤',
     hint: '드라마 예고 · 한 옥타브 아래 느낌',
-    rate: 0.84,
-    lowShelf: 4,
-    lowpass: 5200,
+    rate: 0.86,
+    lowShelf: 4.5,
+    lowpass: 6000,
+    warmth: 2.4,
     free: false,
   },
 ];
@@ -80,6 +87,8 @@ export interface Clip {
   /** 원래 음성 길이(초) — 배속 전 */
   seconds: number;
   error?: string;
+  /** 어떤 엔진이 만든 음성인지(서버가 알려 줌) */
+  engine?: string;
 }
 
 const clips = new Map<string, Clip>();
@@ -89,6 +98,17 @@ let serverState: 'probing' | 'ready' | 'unavailable' = 'probing';
 let decodeCtx: AudioContext | null = null;
 
 let lastError = '';
+let engineUsed = '';
+
+export interface TtsStatus {
+  reachable: boolean;
+  defaultEngine: string;
+  engines: { google: boolean; openai: boolean; elevenlabs: boolean };
+  maxChars: number;
+}
+
+let ttsStatus: TtsStatus | null = null;
+let probeTask: Promise<TtsStatus> | null = null;
 
 function emit() {
   version += 1;
@@ -128,6 +148,14 @@ export function serverTtsState(): 'probing' | 'ready' | 'unavailable' {
   return serverState;
 }
 
+export function ttsServerStatus(): TtsStatus | null {
+  return ttsStatus;
+}
+
+export function lastTtsEngine(): string {
+  return engineUsed || ttsStatus?.defaultEngine || '';
+}
+
 /** 브라우저 음성(Web Speech)만 쓸 수 있는 상황인지 — 서버가 없을 때의 미리보기 폴백. */
 export function isSpeechSupported(): boolean {
   return typeof window !== 'undefined' && 'speechSynthesis' in window && typeof window.SpeechSynthesisUtterance !== 'undefined';
@@ -137,6 +165,65 @@ export function narrationSource(): NarrationSource {
   if (serverState === 'ready') return 'server';
   if (isSpeechSupported()) return 'speech';
   return 'none';
+}
+
+/* ── 서버 상태 ─────────────────────────────────────────── */
+
+/** GET /api/tts — 어떤 음성 엔진을 쓸 수 있는지 한 번만 물어봅니다. */
+export function probeTts(timeoutMs = 4000): Promise<TtsStatus> {
+  if (ttsStatus) return Promise.resolve(ttsStatus);
+  if (probeTask) return probeTask;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  probeTask = fetch(TTS_ENDPOINT, { headers: { accept: 'application/json' }, cache: 'no-store', signal: controller.signal })
+    .then(async (response) => {
+      const text = await response.text();
+      let payload: {
+        ok?: boolean;
+        provider?: string;
+        engines?: { google?: boolean; openai?: boolean; elevenlabs?: boolean };
+        maxChars?: number;
+      } | null = null;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = null;
+      }
+      if (!response.ok || !payload?.ok) {
+        serverState = 'unavailable';
+        const fallback: TtsStatus = { reachable: false, defaultEngine: '', engines: { google: false, openai: false, elevenlabs: false }, maxChars: 190 };
+        ttsStatus = fallback;
+        emit();
+        return fallback;
+      }
+      const status: TtsStatus = {
+        reachable: true,
+        defaultEngine: payload.provider ?? 'google-translate',
+        engines: {
+          google: payload.engines?.google !== false,
+          openai: Boolean(payload.engines?.openai),
+          elevenlabs: Boolean(payload.engines?.elevenlabs),
+        },
+        maxChars: payload.maxChars ?? 190,
+      };
+      ttsStatus = status;
+      const anyEngine = status.engines.google || status.engines.openai || status.engines.elevenlabs;
+      serverState = anyEngine ? 'ready' : 'unavailable';
+      emit();
+      return status;
+    })
+    .catch(() => {
+      serverState = 'unavailable';
+      const fallback: TtsStatus = { reachable: false, defaultEngine: '', engines: { google: false, openai: false, elevenlabs: false }, maxChars: 190 };
+      ttsStatus = fallback;
+      emit();
+      return fallback;
+    })
+    .finally(() => {
+      clearTimeout(timer);
+      probeTask = null;
+    });
+  return probeTask;
 }
 
 /* ── 디코드 ────────────────────────────────────────────── */
@@ -207,8 +294,16 @@ function fromBase64(text: string): Uint8Array {
 
 /* ── 생성 ──────────────────────────────────────────────── */
 
-async function requestAudio(text: string): Promise<ArrayBuffer | null> {
-  const url = `${TTS_ENDPOINT}?text=${encodeURIComponent(text)}`;
+/** 서버에 함께 보낼 화자 스타일 — OpenAI TTS는 이 값으로 말투 지시를 넣습니다. */
+let requestStyle = 'story';
+
+export function setTtsStyle(style: string): void {
+  if (style) requestStyle = style;
+}
+
+async function requestAudio(text: string, voice: VoiceId): Promise<ArrayBuffer | null> {
+  const query = new URLSearchParams({ text, voice, provider: 'auto', style: requestStyle });
+  const url = `${TTS_ENDPOINT}?${query.toString()}`;
   try {
     const response = await fetch(url, { headers: { accept: 'audio/*' } });
     if (!response.ok) {
@@ -228,6 +323,7 @@ async function requestAudio(text: string): Promise<ArrayBuffer | null> {
       return null;
     }
     serverState = 'ready';
+    engineUsed = response.headers.get('x-tts-provider') ?? engineUsed;
     return await response.arrayBuffer();
   } catch {
     serverState = 'unavailable';
@@ -235,7 +331,7 @@ async function requestAudio(text: string): Promise<ArrayBuffer | null> {
   }
 }
 
-/** 문장 하나의 음성을 확보합니다(이미 있으면 그대로). */
+/** 한 문장(또는 호흡 블록)의 음성을 확보합니다(이미 있으면 그대로). */
 export async function loadClip(text: string, voice: VoiceId): Promise<Clip> {
   const clean = normalize(text);
   if (!clean) {
@@ -251,6 +347,8 @@ export async function loadClip(text: string, voice: VoiceId): Promise<Clip> {
   clips.set(key, pending);
   emit();
 
+  if (!ttsStatus) await probeTts();
+
   const cache = readCache();
   const cached = cache[key];
   let buffer: AudioBuffer | null = null;
@@ -258,7 +356,7 @@ export async function loadClip(text: string, voice: VoiceId): Promise<Clip> {
     buffer = await decode(fromBase64(cached).buffer as ArrayBuffer);
   }
   if (!buffer) {
-    const data = await requestAudio(clean);
+    const data = await requestAudio(clean, voice);
     if (data) {
       buffer = await decode(data);
       if (buffer) {
@@ -269,7 +367,7 @@ export async function loadClip(text: string, voice: VoiceId): Promise<Clip> {
   }
 
   const clip: Clip = buffer
-    ? { status: 'ready', buffer, seconds: buffer.duration }
+    ? { status: 'ready', buffer, seconds: buffer.duration, engine: engineUsed }
     : {
         status: 'error',
         seconds: 0,
@@ -280,7 +378,7 @@ export async function loadClip(text: string, voice: VoiceId): Promise<Clip> {
   return clip;
 }
 
-/** 여러 컷을 한 번에 — 이미 있는 컷은 건너뜁니다. */
+/** 여러 문장을 한 번에 — 이미 있는 문장은 건너뜁니다. */
 export async function loadClips(texts: string[], voice: VoiceId): Promise<Clip[]> {
   return Promise.all(texts.map((text) => loadClip(text, voice)));
 }
@@ -316,19 +414,26 @@ function koreanVoice(): SpeechSynthesisVoice | null {
   );
 }
 
-export function speakFallback(text: string, rate = 1.08): boolean {
+const speechEnds = new Set<() => void>();
+
+export function speakFallback(
+  text: string,
+  options: { rate?: number; pitch?: number; onEnd?: () => void } = {},
+): boolean {
   const clean = text.trim();
   if (!isSpeechSupported() || !clean) return false;
-  window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(clean);
   const voice = koreanVoice();
   if (voice) utterance.voice = voice;
   utterance.lang = 'ko-KR';
-  utterance.rate = rate;
-  utterance.pitch = 1;
-  utterance.onerror = (event) => {
-    if (event.error === 'interrupted' || event.error === 'canceled') return;
+  utterance.rate = Math.max(0.5, Math.min(2, options.rate ?? 1.04));
+  utterance.pitch = Math.max(0.5, Math.min(1.6, options.pitch ?? 1));
+  const done = () => {
+    if (options.onEnd) options.onEnd();
   };
+  speechEnds.add(done);
+  utterance.onend = done;
+  utterance.onerror = done;
   window.speechSynthesis.speak(utterance);
   return true;
 }
@@ -336,6 +441,8 @@ export function speakFallback(text: string, rate = 1.08): boolean {
 export function stopFallbackSpeech(): void {
   if (!isSpeechSupported()) return;
   window.speechSynthesis.cancel();
+  for (const done of speechEnds) done();
+  speechEnds.clear();
 }
 
 /** 음성 길이(배속 반영) — 컷 길이 추천에도 씁니다. */

@@ -8,6 +8,10 @@ import type { EffectId } from './scene';
  */
 
 export type ArtGenre = 'royal' | 'office' | 'rain' | 'cafe' | 'comic' | 'night' | 'cozy' | 'nature';
+export const ART_GENRES: ArtGenre[] = ['royal', 'office', 'rain', 'cafe', 'comic', 'night', 'cozy', 'nature'];
+export function isArtGenre(value: string): value is ArtGenre {
+  return (ART_GENRES as string[]).includes(value);
+}
 export type ArtShot = 'close' | 'medium' | 'wide' | 'two-shot';
 export type ArtExpression = 'neutral' | 'smile' | 'smirk' | 'tired' | 'sad' | 'shock' | 'angry' | 'dizzy' | 'smug';
 
@@ -602,10 +606,18 @@ export interface ArtQuery {
 
 function scoreArt(art: ArtDef, query: ArtQuery): number {
   let score = 0;
+  let sceneHits = 0;
   for (const tag of art.tags) {
-    if (query.scene.includes(tag)) score += 7;
-    else if (query.body.includes(tag)) score += 2.6;
+    if (query.scene.includes(tag)) {
+      // 장소 지시가 그림을 고르는 가장 강한 단서 — 대본의 장면과 그림이 어긋나지 않게.
+      score += 10;
+      sceneHits += 1;
+    } else if (query.body.includes(tag)) {
+      score += 1.9;
+    }
   }
+  // 장소가 있는데 그 장소를 그린 그림이 하나도 안 맞으면 뒤로 미룹니다.
+  if (query.scene.trim() && sceneHits === 0) score -= 8;
   if (query.expression && art.expression === query.expression) score += 5;
 
   score += (TEMPLATE_AFFINITY[query.template][art.genre] ?? 0) * 2;
@@ -632,7 +644,7 @@ function scoreArt(art: ArtDef, query: ArtQuery): number {
     // 컷마다 구도를 번갈아 — 같은 구도가 세 번 이어지지 않게
     if (query.previous.shot !== 'wide' && art.shot === 'wide') score += 0.8;
   }
-  score += query.rng.range(0, 2.8);
+  score += query.rng.range(0, 1.6);
   return score;
 }
 
@@ -641,12 +653,33 @@ function scoreArt(art: ArtDef, query: ArtQuery): number {
  * 장소·표정 키워드가 맞는 그림 중에서, 같은 영상에 이미 쓴 그림과 같은 결은 뒤로 미룹니다.
  * 시드가 바뀌면 점수가 비슷한 후보 중 다른 그림이 뽑혀 같은 주제라도 매번 새 영상이 됩니다.
  */
+function sceneHits(art: ArtDef, scene: string): number {
+  return art.tags.reduce((count, tag) => (scene.includes(tag) ? count + 1 : count), 0);
+}
+
 export function pickArt(query: ArtQuery): ArtDef {
   const locked = query.genreLock ? ARTS.filter((art) => art.genre === query.genreLock) : [];
   const pool = locked.length >= 5 ? locked : ARTS;
-  const ranked = pool.filter((art) => !query.usedIds.has(art.id))
+
+  // 같은 장소가 다시 나왔는데 그 장소를 그린 새 그림이 없으면,
+  // 엉뚱한 그림을 끼워 넣지 않고 그 장소의 그림을 다시 씁니다(카메라 무빙은 컷마다 달라집니다).
+  const unusedArts = pool.filter((art) => !query.usedIds.has(art.id));
+  if (query.scene.trim() && !unusedArts.some((art) => sceneHits(art, query.scene) > 0)) {
+    const revisited = pool
+      .filter((art) => query.usedIds.has(art.id) && sceneHits(art, query.scene) > 0)
+      .sort((a, b) => sceneHits(b, query.scene) - sceneHits(a, query.scene));
+    if (revisited.length) return revisited[0]!;
+  }
+  let ranked = pool
+    .filter((art) => !query.usedIds.has(art.id))
     .map((art) => ({ art, score: scoreArt(art, query) }))
     .sort((a, b) => b.score - a.score);
+  // 고정 장르를 다 썼으면 같은 장르를 반복하기보다 전체 풀에서 아직 안 쓴 그림을 고릅니다.
+  if (ranked.length === 0) {
+    ranked = ARTS.filter((art) => !query.usedIds.has(art.id))
+      .map((art) => ({ art, score: scoreArt(art, query) }))
+      .sort((a, b) => b.score - a.score);
+  }
   if (ranked.length === 0) return ARTS[0]!;
   // 1~3위 안에서 시드로 뽑되, 1위가 확실히 앞서면(3점 이상) 그대로.
   const top = ranked.slice(0, 3);

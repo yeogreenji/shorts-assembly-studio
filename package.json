@@ -1,9 +1,9 @@
 {
   "name": "shortcut-studio",
   "private": true,
-  "version": "8.0.0",
+  "version": "9.0.0",
   "type": "module",
-  "description": "주제 한 줄로 웹툰·로판 일러스트 6컷이 2.5D로 살아 움직이고, 한국어 AI 나레이션·배경음·자막·브랜드까지 한 파일로 저장하는 9:16 쇼츠 스튜디오 (Free/Pro 요금제)",
+  "description": "주제 한 줄로 35~60초 완성형 10컷 대본과 웹툰·로판 일러스트가 2.5D로 살아 움직이고, 컷을 이어 읽는 한국어 나레이션·내 목소리 녹음·배경음·자막·브랜드까지 한 파일로 저장하는 9:16 쇼츠 스튜디오 (Free/Pro 요금제)",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && tsc -p tsconfig.api.json && vite build",

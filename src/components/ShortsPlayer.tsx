@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AudioSettings, Shorts } from '../types';
 import { roleLabel } from '../lib/templates';
 import { cutStartTimes, formatClock, totalDuration } from '../lib/srt';
-import { captionTokens, stripMarks } from '../lib/text';
-import { ensureClip, getClip, narrationSource, speakFallback, stopFallbackSpeech, voiceOf } from '../lib/audio/tts';
+import { captionTokens } from '../lib/text';
+import { ensureClip, getClip, voiceOf } from '../lib/audio/tts';
+import { deliveryOf } from '../lib/audio/narration';
+import { speakBlocks, stopSpeechQueue } from '../lib/audio/speechQueue';
 import { previewMix } from '../lib/audio/mixer';
 import { previewBgm } from '../lib/audio/bgm';
 import { buildScenePlan } from '../lib/motion/scene';
@@ -11,29 +13,37 @@ import { renderFrame } from '../lib/motion/draw';
 import { MOTION_LEVELS, type MotionLevel } from '../lib/motion/stage';
 import { onArtLoaded, preloadArts } from '../lib/motion/artLoader';
 import { audioOf } from '../lib/defaults';
-import { useNarrationTick } from '../hooks/useNarration';
+import type { NarrationView } from '../hooks/useNarration';
 import { Icon } from './Icon';
+import { Timeline } from './Timeline';
 
 /**
  * 9:16 스테이지.
  * 캔버스 한 장에 그림·카메라 무빙·파티클·컷 전환·자막·HUD를 모두 그리고,
  * 그 위에 나레이션과 배경음을 한 믹서에서 겹칩니다(저장 영상과 같은 경로).
+ *
+ * 나레이션은 컷마다 끊어 읽지 않고 '호흡 블록'(2~4컷을 이어 붙인 문장)을 한 번에 재생합니다 —
+ * 블록이 컷 경계를 넘어 이어지므로 목소리가 뚝뚝 끊기지 않습니다.
  */
 export function ShortsPlayer({
   shorts,
+  narration,
   playNonce,
   seekRequest,
   motion,
   onMotion,
   onAudio,
+  onSeek,
   platformMark = false,
 }: {
   shorts: Shorts;
+  narration: NarrationView;
   playNonce: number;
   seekRequest: { index: number; nonce: number } | null;
   motion: MotionLevel;
   onMotion: (level: MotionLevel) => void;
   onAudio: (patch: Partial<AudioSettings>) => void;
+  onSeek: (index: number) => void;
   platformMark?: boolean;
 }) {
   const total = useMemo(() => totalDuration(shorts.cuts), [shorts.cuts]);
@@ -41,7 +51,8 @@ export function ShortsPlayer({
   const plan = useMemo(() => buildScenePlan(shorts), [shorts]);
   const audio = audioOf(shorts);
   const voice = audio.voice ?? 'clear';
-  const voiceTick = useNarrationTick();
+  const preset = voiceOf(voice);
+  const delivery = deliveryOf(audio.delivery);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [safeZone, setSafeZone] = useState(false);
@@ -51,19 +62,24 @@ export function ShortsPlayer({
   const frameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const timeRef = useRef(0);
-  const spokenRef = useRef(-1);
   const lastNonce = useRef(playNonce);
   const playingRef = useRef(false);
   const rafRef = useRef(0);
   const uiClock = useRef(0);
-  /** 마지막으로 그린 시각 — 화면 크기가 바뀌어 다시 그릴 때 같은 프레임을 유지합니다. */
   const lastPaintRef = useRef(0);
-  /** 미리보기 캔버스 해상도 — 기기 성능에 맞춰 자동으로 오르내립니다(녹화는 항상 720/1080). */
   const pixelRef = useRef(576);
   const maxPixelRef = useRef(720);
   const perfRef = useRef({ frames: 0, sum: 0 });
   const audioRef = useRef(audio);
   audioRef.current = audio;
+  const narrRef = useRef(narration);
+  narrRef.current = narration;
+  /** 이번 재생에서 이미 예약한 큐 — 같은 블록을 두 번 예약하지 않게. */
+  const scheduledRef = useRef(new Set<string>());
+  /** 재생 시작 시각과 오디오 시계의 기준점 — 타임라인 초를 AudioContext 초로 옮길 때 씁니다. */
+  const clockRef = useRef({ timeline: 0, audio: 0 });
+  const speechKeyRef = useRef('');
+  const retriedRef = useRef(new Set<string>());
 
   const activeIndex = useMemo(() => {
     let index = 0;
@@ -84,13 +100,11 @@ export function ShortsPlayer({
       if (!canvas) return;
       const stamp = at ?? timeRef.current;
       lastPaintRef.current = stamp;
-      // 미리보기도 영상과 같은 함수·같은 옵션 — 자막·HUD·플랫폼 표식까지 캔버스에 굽습니다.
       renderFrame(canvas, plan, stamp, { captions: true, hud: true, motion, platformMark });
     },
     [plan, motion, platformMark],
   );
 
-  // 캔버스 픽셀 크기 — 화면 폭·DPR에 맞추되, 프레임이 무거우면 스스로 낮춥니다.
   const sizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -120,7 +134,6 @@ export function ShortsPlayer({
     return () => observer.disconnect();
   }, [sizeCanvas]);
 
-  // 일러스트가 도착하면 그 즉시 다시 그립니다(멈춰 있어도 그림이 나타나게)
   useEffect(() => {
     const off = onArtLoaded(() => setArtVersion((value) => value + 1));
     void preloadArts(plan.cuts.map((item) => item.art.id));
@@ -146,7 +159,6 @@ export function ShortsPlayer({
     };
   }, [plan, total, motion, platformMark]);
 
-  // 보고 있는 컷과 다음 컷 그림을 먼저 준비합니다.
   useEffect(() => {
     const ids = [plan.cuts[activeIndex]?.art.id, plan.cuts[activeIndex + 1]?.art.id].filter(
       (id): id is string => Boolean(id),
@@ -170,7 +182,6 @@ export function ShortsPlayer({
       const next = Math.min(total, timeRef.current + delta);
       timeRef.current = next;
       paint(next);
-      // 20프레임마다 평균 프레임 시간을 보고 해상도를 한 단계 조절합니다(60fps 지향).
       perfRef.current.frames += 1;
       perfRef.current.sum += delta;
       if (perfRef.current.frames >= 20) {
@@ -207,44 +218,180 @@ export function ShortsPlayer({
     return () => cancelAnimationFrame(rafRef.current);
   }, [playing, total, paint]);
 
+  /* ── 나레이션 큐 ───────────────────────────────────────── */
+
+  const rate = Math.max(0.6, Math.min(1.6, preset.rate * delivery.rate * audio.voiceRate));
+
+  /** 블록이 실패하면 컷 문장을 낱개로 다시 시도합니다(구글 TTS가 잠깐 막힐 때). */
+  useEffect(() => {
+    if (!playing || !audio.narration || audio.muted || audio.voiceSource === 'mine') return;
+    if (narration.source !== 'server') return;
+    for (const block of narration.blocks) {
+      const clip = narration.clips[block.index];
+      if (!clip || clip.status !== 'error') continue;
+      for (const cutIndex of block.cutIndexes) {
+        const text = narration.texts[cutIndex];
+        if (!text) continue;
+        const key = `${voice}|${text}`;
+        if (retriedRef.current.has(key)) continue;
+        retriedRef.current.add(key);
+        void ensureClip(text, voice);
+      }
+    }
+  }, [playing, audio.narration, audio.muted, audio.voiceSource, narration, voice, artVersion]);
+
+  /** 재생·이동·설정이 바뀌면 큐를 비우고 지금 위치부터 다시 겁니다. */
+  const resetCues = useCallback(() => {
+    scheduledRef.current.clear();
+    previewMix.stopVoices();
+    clockRef.current = { timeline: timeRef.current, audio: 0 };
+  }, []);
+
   /**
-   * 나레이션 — 컷이 바뀌면 그 컷의 음성을 같은 믹서에 얹습니다.
-   * 음성이 아직 준비 중이면 도착하는 순간(voiceTick) 컷 중간부터 맞춰 재생합니다.
+   * 타임라인 시계와 오디오 시계를 새로 맞춥니다.
+   * 오디오가 실제로 흐르기 시작한 뒤에 기준점을 잡아야 컷과 음성이 어긋나지 않습니다.
+   */
+  const anchorClock = useCallback(() => {
+    resetCues();
+    const timeline = timeRef.current;
+    void previewMix.resume().then(() => {
+      if (!playingRef.current) return;
+      clockRef.current = { timeline, audio: previewMix.now + 0.04 };
+      setAudioNonce((value) => value + 1);
+    });
+  }, [resetCues]);
+
+  useEffect(() => {
+    if (!playing) return;
+    anchorClock();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing]);
+
+  /**
+   * 아직 예약하지 않은 큐를 지금 위치 기준으로 예약합니다.
+   * 준비 중이던 음성이 도착하면(voiceTick) 이 함수가 다시 불려 이어서 붙습니다.
    */
   useEffect(() => {
-    if (!playing || audioRef.current.muted || !audioRef.current.narration || !cut) return;
-    if (spokenRef.current === activeIndex) return;
+    if (!playing) return;
     const settings = audioRef.current;
-    const text = stripMarks(cut.subtitle);
-    if (!text) return;
-    const clip = getClip(text, voice);
-    const preset = voiceOf(voice);
-    const offset = Math.max(0, timeRef.current - (starts[activeIndex] ?? 0));
+    if (!settings.narration || settings.muted) return;
+    // 오디오 기준점이 잡히기 전에는 예약하지 않습니다(재생 시작 직후 한 박자).
+    if (!clockRef.current.audio) return;
+    const now = timeRef.current;
+    const ctxNow = previewMix.now || clockRef.current.audio;
+    const anchor = clockRef.current.audio || ctxNow + 0.03;
+    const timelineZero = clockRef.current.timeline;
 
-    if (clip.status === 'ready' && clip.buffer) {
-      spokenRef.current = activeIndex;
-      void previewMix.resume().then(() => {
-        if (!playingRef.current) return;
-        previewMix.playVoice(clip.buffer as AudioBuffer, preset, undefined, {
-          rate: settings.voiceRate,
+    const cueStart = (start: number) => anchor + (start - timelineZero);
+
+    // 내 목소리 — 컷마다 붙인 녹음/파일
+    if (settings.voiceSource === 'mine') {
+      shorts.cuts.forEach((item, index) => {
+        const take = narration.takes[index];
+        if (!take) return;
+        const id = `take-${item.id}`;
+        if (scheduledRef.current.has(id)) return;
+        const start = starts[index] ?? 0;
+        if (start + Math.min(item.duration, take.seconds) < now) return;
+        scheduledRef.current.add(id);
+        const offset = Math.max(0, now - start);
+        previewMix.playVoice(take.buffer, preset, cueStart(start), {
+          rate: 1,
+          tone: 0,
           gain: settings.voiceVolume,
           offset,
+          maxSeconds: Math.min(item.duration + 0.25, take.seconds - offset),
           duck: settings.ducking,
-          lowShelf: preset.lowShelf,
-          lowpass: preset.lowpass,
+          warmth: 0.6,
         });
       });
       return;
     }
-    if (clip.status === 'idle') {
-      void ensureClip(text, voice);
+
+    // AI 음성 — 호흡 블록 단위
+    narration.blocks.forEach((block) => {
+      const blockId = `block-${block.index}`;
+      if (scheduledRef.current.has(blockId)) return;
+      const first = block.cutIndexes[0] ?? 0;
+      const last = block.cutIndexes[block.cutIndexes.length - 1] ?? first;
+      const start = starts[first] ?? 0;
+      const end = starts[last + 1] ?? total;
+      const window = Math.max(0.4, end - start);
+      if (start + window < now) return;
+
+      const clip = narration.clips[block.index];
+      if (clip?.status === 'ready' && clip.buffer) {
+        scheduledRef.current.add(blockId);
+        const offset = Math.max(0, now - start);
+        previewMix.playVoice(clip.buffer, preset, cueStart(start), {
+          rate,
+          tone: settings.voiceTone,
+          gain: settings.voiceVolume,
+          offset,
+          maxSeconds: Math.max(0.3, window + 0.3 - offset),
+          duck: settings.ducking,
+          lowShelf: preset.lowShelf,
+          lowpass: preset.lowpass,
+          warmth: preset.warmth + delivery.warmth,
+        });
+        return;
+      }
+
+      // 블록 음성이 실패했고 컷 문장은 준비돼 있으면, 컷 단위로 이어 읽습니다.
+      if (clip?.status === 'error') {
+        block.cutIndexes.forEach((cutIndex, position) => {
+          const cutId = `cut-audio-${block.index}-${cutIndex}`;
+          if (scheduledRef.current.has(cutId)) return;
+          const text = narration.texts[cutIndex];
+          const single = text ? getClip(text, voice) : null;
+          if (!single || single.status !== 'ready' || !single.buffer) return;
+          const cutStart = starts[cutIndex] ?? start + position;
+          const cutEnd = starts[cutIndex + 1] ?? end;
+          if (cutEnd < now) return;
+          scheduledRef.current.add(cutId);
+          const offset = Math.max(0, now - cutStart);
+          previewMix.playVoice(single.buffer, preset, cueStart(cutStart), {
+            rate,
+            tone: settings.voiceTone,
+            gain: settings.voiceVolume,
+            offset,
+            maxSeconds: Math.max(0.25, cutEnd - cutStart + 0.2 - offset),
+            duck: settings.ducking,
+            lowShelf: preset.lowShelf,
+            lowpass: preset.lowpass,
+            warmth: preset.warmth + delivery.warmth,
+          });
+        });
+      }
+    });
+    // 블록 텍스트·길이가 바뀌면 다시
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, audioNonce, narration, voice, rate, audio.voiceVolume, audio.ducking, audio.voiceSource, audio.voiceTone, shorts.cuts, starts, total]);
+
+  /**
+   * 서버 음성이 없을 때(정적 호스팅) — 브라우저 음성으로 블록을 이어 읽습니다.
+   * 컷마다 cancel하지 않고 큐에 차례로 넣기만 해 문장이 끊기지 않습니다.
+   */
+  useEffect(() => {
+    if (!playing || narration.source !== 'speech' || !audio.narration || audio.muted || audio.voiceSource === 'mine') {
+      stopSpeechQueue();
+      speechKeyRef.current = '';
       return;
     }
-    if (clip.status === 'error' && narrationSource() === 'speech') {
-      spokenRef.current = activeIndex;
-      speakFallback(text, 1.06 * preset.rate * settings.voiceRate);
-    }
-  }, [playing, activeIndex, voiceTick, voice, cut, starts]);
+    const key = `${narration.blocks.map((block) => block.text).join('|')}|${voice}|${rate}|${delivery.id}`;
+    if (speechKeyRef.current === key) return;
+    speechKeyRef.current = key;
+    if (timeRef.current > 0.3) return; // 중간부터는 브라우저 음성을 새로 걸지 않습니다(처음부터 재생에서만)
+    speakBlocks(
+      narration.blocks.map((block) => ({ text: block.text, cutIndexes: block.cutIndexes })),
+      {
+        rate: rate * 1.02,
+        pitch: delivery.id === 'drama' ? 0.82 : delivery.id === 'friendly' ? 1.1 : delivery.id === 'anchor' ? 1 : 0.94,
+      },
+    );
+    return () => stopSpeechQueue();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, narration.source, narration.blocks, voice, rate, audio.narration, audio.muted, audio.voiceSource, delivery.id]);
 
   // 배경음 — 재생 상태·무드·위치가 바뀔 때마다 그 지점부터 다시 맞춥니다.
   useEffect(() => {
@@ -270,15 +417,17 @@ export function ShortsPlayer({
 
   useEffect(() => {
     if (!playing) {
-      stopFallbackSpeech();
+      stopSpeechQueue();
       previewMix.stopVoices();
+      scheduledRef.current.clear();
     }
   }, [playing]);
 
   useEffect(
     () => () => {
-      stopFallbackSpeech();
+      stopSpeechQueue();
       previewBgm.stop();
+      previewMix.stopVoices();
     },
     [],
   );
@@ -287,7 +436,7 @@ export function ShortsPlayer({
   useEffect(() => {
     const onExport = () => {
       setPlaying(false);
-      stopFallbackSpeech();
+      stopSpeechQueue();
     };
     window.addEventListener('shortcut:export', onExport);
     return () => window.removeEventListener('shortcut:export', onExport);
@@ -297,7 +446,7 @@ export function ShortsPlayer({
   useEffect(() => {
     if (lastNonce.current === playNonce) return;
     lastNonce.current = playNonce;
-    spokenRef.current = -1;
+    retriedRef.current.clear();
     timeRef.current = 0;
     setTime(0);
     setPlaying(true);
@@ -306,56 +455,63 @@ export function ShortsPlayer({
 
   useEffect(() => {
     if (!seekRequest) return;
-    spokenRef.current = -1;
-    stopFallbackSpeech();
+    stopSpeechQueue();
     previewMix.stopVoices();
+    scheduledRef.current.clear();
     const next = starts[seekRequest.index] ?? 0;
     timeRef.current = next;
     setTime(next);
     setPlaying(true);
-    setAudioNonce((value) => value + 1);
+    resetCues();
+    const timeline = next;
+    void previewMix.resume().then(() => {
+      if (!playingRef.current) return;
+      clockRef.current = { timeline, audio: previewMix.now + 0.04 };
+      setAudioNonce((value) => value + 1);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekRequest]);
 
   const toggle = useCallback(() => {
     if (playing) {
-      spokenRef.current = -1;
       setPlaying(false);
-      stopFallbackSpeech();
+      stopSpeechQueue();
       previewMix.stopVoices();
+      scheduledRef.current.clear();
       return;
     }
     if (atEnd) {
       timeRef.current = 0;
       setTime(0);
     }
-    spokenRef.current = -1;
+    scheduledRef.current.clear();
+    retriedRef.current.clear();
     void previewMix.resume();
     setPlaying(true);
-    setAudioNonce((value) => value + 1);
-  }, [atEnd, playing]);
+    anchorClock();
+  }, [anchorClock, atEnd, playing]);
 
   const restart = useCallback(() => {
-    spokenRef.current = -1;
-    stopFallbackSpeech();
+    stopSpeechQueue();
     previewMix.stopVoices();
+    scheduledRef.current.clear();
     timeRef.current = 0;
     setTime(0);
     void previewMix.resume();
     setPlaying(true);
-    setAudioNonce((value) => value + 1);
-  }, []);
+    anchorClock();
+  }, [anchorClock]);
 
   const toggleSound = useCallback(() => {
     onAudio({ muted: !audio.muted });
     if (!audio.muted) {
-      stopFallbackSpeech();
+      stopSpeechQueue();
       previewMix.stopVoices();
-      spokenRef.current = -1;
+      scheduledRef.current.clear();
     }
   }, [audio.muted, onAudio]);
 
-  const voiceReady = narrationSource();
+  const voiceReady = narration.source;
 
   return (
     <div className="flex w-full flex-col items-center">
@@ -371,6 +527,11 @@ export function ShortsPlayer({
         data-motion={motion}
         data-audio={audio.mood}
         data-voice={voice}
+        data-delivery={audio.delivery}
+        data-cuts={shorts.cuts.length}
+        data-narration-seconds={(
+          narration.clips.reduce((sum, clip) => sum + (clip.seconds || 0), 0) / Math.max(0.5, rate)
+        ).toFixed(1)}
         role="button"
         tabIndex={0}
         aria-label={playing ? '쇼츠 미리보기 멈추기' : '쇼츠 미리보기 재생'}
@@ -381,10 +542,9 @@ export function ShortsPlayer({
             toggle();
           }
         }}
-        className="stage-shell relative shrink-0 cursor-pointer select-none overflow-hidden rounded-[14px] bg-black shadow-[0_24px_70px_-40px_rgba(0,0,0,0.95)]"
-        style={{ height: 'min(58vh, 520px)', aspectRatio: '9 / 16' }}
+        className="stage-shell relative shrink-0 cursor-pointer select-none overflow-hidden rounded-[10px] bg-black shadow-[0_24px_70px_-40px_rgba(0,0,0,0.95)]"
+        style={{ height: 'min(52vh, 480px)', aspectRatio: '9 / 16' }}
       >
-        {/* 그림 + 카메라 무빙 + 파티클 + 컷 전환 + 자막 + HUD (영상과 같은 렌더러) */}
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full"
@@ -395,7 +555,6 @@ export function ShortsPlayer({
           aria-hidden="true"
         />
 
-        {/* 자막은 캔버스에 구워집니다. 이 요소는 화면 낭독기·검증용 같은 글자입니다. */}
         {cut ? (
           <p
             key={`sub-${cut.id}`}
@@ -415,7 +574,6 @@ export function ShortsPlayer({
           </p>
         ) : null}
 
-        {/* 세이프 존 — 틱톡·릴스·쇼츠 UI에 가리는 영역을 미리 보여 줍니다(영상에는 안 들어감) */}
         {safeZone ? (
           <div className="pointer-events-none absolute inset-0 z-20" data-testid="safe-zone">
             <div className="absolute inset-x-0 top-0 h-[11%] border-b border-dashed border-mist-300/60 bg-white/[0.06]">
@@ -431,7 +589,6 @@ export function ShortsPlayer({
           </div>
         ) : null}
 
-        {/* 재생 상태 표식 — 이모지 없이 아이콘만 */}
         {!playing ? (
           <div className="pause-overlay absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-black/20">
             <span
@@ -440,13 +597,10 @@ export function ShortsPlayer({
             >
               <Icon name={atEnd ? 'restart' : 'play'} size={Math.max(18, 46 * scale)} />
             </span>
-            <span className="text-[10px] font-medium tracking-wide text-white/70">
-              {atEnd ? '다시 보기' : '눌러서 재생'}
-            </span>
+            <span className="text-[10px] font-medium tracking-wide text-white/70">{atEnd ? '다시 보기' : '눌러서 재생'}</span>
           </div>
         ) : null}
 
-        {/* 재생 중 표식 */}
         {playing ? (
           <div className="pointer-events-none absolute left-2 top-2 z-20 flex items-center gap-1.5 rounded border border-white/15 bg-black/55 px-1.5 py-0.5 text-[9px] font-medium text-white/90 backdrop-blur-sm">
             <span className="dot dot-live bg-mint-400" aria-hidden="true" />
@@ -456,7 +610,7 @@ export function ShortsPlayer({
       </div>
 
       {/* 트랜스포트 */}
-      <div className="mt-3 w-full max-w-[420px]">
+      <div className="mt-2.5 w-full max-w-[460px]">
         <div className="flex items-center gap-1.5">
           <button
             type="button"
@@ -506,6 +660,15 @@ export function ShortsPlayer({
           </button>
         </div>
 
+        <Timeline
+          shorts={shorts}
+          total={total}
+          time={time}
+          activeIndex={activeIndex}
+          blocks={narration.blocks}
+          onSeekCut={(index) => onSeek(index)}
+        />
+
         <div className="mt-1.5 flex items-center gap-1.5">
           <div className="seg flex-1" role="group" aria-label="모션 강도">
             {MOTION_LEVELS.map((level) => (
@@ -533,8 +696,20 @@ export function ShortsPlayer({
             {activeIndex + 1}/{shorts.cuts.length}컷 · {roleLabel(activeIndex, shorts.cuts.length, shorts.template)}
           </span>
           <span className="flex shrink-0 items-center gap-1">
-            <Icon name="mic" size={11} className={audio.narration && voiceReady !== 'none' ? 'text-mint-400' : 'text-mist-600'} />
-            {audio.narration ? (voiceReady === 'server' ? 'AI 음성' : voiceReady === 'speech' ? '브라우저 음성' : '음성 대기') : '음성 꺼짐'}
+            <Icon
+              name="mic"
+              size={11}
+              className={audio.narration && voiceReady !== 'none' ? 'text-mint-400' : 'text-mist-600'}
+            />
+            {!audio.narration
+              ? '음성 꺼짐'
+              : audio.voiceSource === 'mine'
+                ? `내 목소리 ${narration.takesCount}컷`
+                : voiceReady === 'server'
+                  ? `AI 음성 · ${delivery.label}`
+                  : voiceReady === 'speech'
+                    ? '브라우저 음성'
+                    : '음성 대기'}
           </span>
         </div>
         {scene ? (

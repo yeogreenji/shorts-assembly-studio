@@ -13,6 +13,8 @@ import { buildPresetShorts, PRESET_MAP } from '../lib/presets';
 import { deleteProject, listProjects, loadProject, saveProject, type ProjectMeta } from '../lib/projects';
 import { addSceneImage } from '../lib/customArt';
 import { getPlan, limitsOf } from '../lib/plan';
+import { applyTake as applyTakeStore, clearTake as clearTakeStore } from '../lib/audio/takes';
+import { narrationTextOf } from '../lib/audio/narration';
 
 export interface Toast {
   id: number;
@@ -133,7 +135,7 @@ export function useShorts() {
           const rateLimited = /429|quota|rate/i.test(detail);
           notify(
             rateLimited
-              ? 'AI가 잠시 붐빕니다(429). 내장 엔진으로 같은 주제의 6컷을 만들었어요.'
+              ? 'AI가 잠시 붐빕니다(429). 내장 엔진으로 같은 주제의 완성형 대본을 만들었어요.'
               : `AI 대본을 못 받아 내장 엔진으로 만들었어요. ${detail}`.trim(),
             'warn',
           );
@@ -143,8 +145,15 @@ export function useShorts() {
         next = buildLocalShorts({ topic: trimmed, template, tone });
         if (server.state === 'local' && server.reason === 'no_key') notify(NOTE.noKey, 'info');
       }
-      apply(next);
-      if (next.source === 'ai') notify('AI가 쓴 6컷 대본이 도착했어요. 바로 재생됩니다.');
+      const counts = `${next.cuts.length}컷 · 약 ${Math.round(next.cuts.reduce((sum, cut) => sum + cut.duration, 0))}초`;
+      // 내 목소리로 녹음해 둔 대본이 아니면 AI 음성으로 시작합니다(새 대본엔 녹음이 없음).
+      const nextAudio = { ...next.audio, voiceSource: 'ai' as const };
+      apply({ ...next, audio: nextAudio });
+      notify(
+        next.source === 'ai'
+          ? `AI가 쓴 ${counts} 대본이 도착했어요. 바로 재생됩니다.`
+          : `내장 엔진으로 ${counts} 대본을 만들었어요. 바로 재생됩니다.`,
+      );
     } catch (error) {
       notify(error instanceof Error ? error.message : '대본을 만들지 못했습니다.', 'error');
     } finally {
@@ -160,6 +169,67 @@ export function useShorts() {
       updatedAt: Date.now(),
     }));
   }, []);
+
+  /** 이 컷을 소리 내어 읽는 문장 — 자막과 따로 고칩니다. */
+  const setCutVoice = useCallback((id: string, voice: string) => {
+    setShorts((prev) => ({
+      ...prev,
+      cuts: prev.cuts.map((cut) => (cut.id === id ? { ...cut, voice } : cut)),
+      updatedAt: Date.now(),
+    }));
+  }, []);
+
+  /** 나레이션 길이에 맞춰 컷 길이를 한 번에 맞춥니다(브라우저가 잰 실제 음성 길이). */
+  const setCutDurations = useCallback((durations: number[]) => {
+    setShorts((prev) => {
+      let changed = false;
+      const cuts = prev.cuts.map((cut, index) => {
+        const next = Math.max(MIN_CUT_SECONDS, Math.min(MAX_CUT_SECONDS, durations[index] ?? cut.duration));
+        const rounded = Math.round(next * 10) / 10;
+        if (Math.abs(rounded - cut.duration) < 0.05) return cut;
+        changed = true;
+        return { ...cut, duration: rounded };
+      });
+      return changed ? { ...prev, cuts, updatedAt: Date.now() } : prev;
+    });
+  }, []);
+
+  /** 직접 녹음·오디오 파일을 컷에 붙입니다 — 붙인 소리 길이에 맞춰 컷도 늘어납니다. */
+  const attachVoiceTake = useCallback(
+    async (id: string, blob: Blob, kind: 'mic' | 'file', name: string) => {
+      try {
+        const take = await applyTakeStore(id, blob, kind, name);
+        setShorts((prev) => ({
+          ...prev,
+          audio: { ...audioOf(prev), voiceSource: 'mine', narration: true },
+          cuts: prev.cuts.map((cut) =>
+            cut.id === id
+              ? { ...cut, duration: Math.round(Math.max(MIN_CUT_SECONDS, Math.min(MAX_CUT_SECONDS, take.seconds + 0.25)) * 10) / 10 }
+              : cut,
+          ),
+          updatedAt: Date.now(),
+        }));
+        notify(`녹음을 붙였습니다 (${take.seconds.toFixed(1)}초). 컷 길이도 함께 맞췄어요.`);
+      } catch (error) {
+        notify(error instanceof Error ? error.message : '녹음을 붙이지 못했습니다.', 'warn');
+      }
+    },
+    [notify],
+  );
+
+  const removeVoiceTake = useCallback(
+    (id: string) => {
+      clearTakeStore(id);
+      notify('이 컷의 녹음을 지웠습니다.');
+    },
+    [notify],
+  );
+
+  /** 컷의 나레이션 문장 — 대본을 고칠 때 화면·가이드가 같은 값을 씁니다. */
+  const narrationOfCut = useCallback((id: string) => {
+    const cut = shorts.cuts.find((item) => item.id === id);
+    return cut ? narrationTextOf(cut) : '';
+  }, [shorts.cuts]);
 
   /** 입력을 마치면 짝이 안 맞는 별표를 정리합니다(타이핑 중에는 그대로 둡니다). */
   const normalizeCut = useCallback((id: string) => {
@@ -339,6 +409,11 @@ export function useShorts() {
     setCutImage,
     clearCutImage,
     uploadCutImage,
+    setCutVoice,
+    setCutDurations,
+    attachVoiceTake,
+    removeVoiceTake,
+    narrationOfCut,
     setAudio,
     setStyle,
     setBrand,

@@ -3,10 +3,11 @@
  *   node scripts/e2e-server.mjs ai 4185     → dist 정적 파일 + api/generate.ts (Gemini 응답은 스텁) + api/tts.ts (음성은 스텁)
  *   node scripts/e2e-server.mjs nokey 4186  → 서버는 있지만 Gemini 키 없음 (501 no_key). 음성(TTS)은 키가 필요 없어 그대로 동작
  *   node scripts/e2e-server.mjs offline 4183→ 정적 파일만 (서버 없음 = GitHub Pages와 같은 상황)
+ *   node scripts/e2e-server.mjs ttsx 4190   → Gemini 키 없이 OpenAI 음성 키만 (음성 어댑터 검증)
  */
 import http from 'node:http';
 import path from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
@@ -31,17 +32,25 @@ const MIME = {
 };
 
 const AI_CUTS = [
-  { role: 'hook', emoji: '🧠', subtitle: 'AI가 쓴 *첫 컷* 훅입니다', duration: 2.8,
+  { role: 'hook', emoji: '🧠', subtitle: 'AI가 쓴 *첫 컷* 훅입니다', voice: 'AI가 쓴 첫 컷 훅입니다. 오늘은 이 한 줄로 시작합니다.', duration: 4.2,
     visual: { scene: '퇴근길 지하철', subject: '직장인', expression: '놀란', action: '휴대폰을 보는', camera: 'punch-in', props: ['휴대폰', '시계'], mood: 'tense' } },
-  { role: 'body', emoji: '🛠️', subtitle: '두 번째 컷은 *포인트* 하나', duration: 3,
+  { role: 'body', emoji: '🛠️', subtitle: '두 번째 컷은 *포인트* 하나', voice: '두 번째 컷은 포인트 하나만 말합니다. 조건을 붙이면 결과가 달라집니다.', duration: 4.6,
     visual: { scene: '사무실 책상 앞', subject: '직장인', expression: '무표정', action: '지폐를 든', camera: 'push-in', props: ['지폐'], mood: 'cold' } },
-  { role: 'body', emoji: '📌', subtitle: '세 번째 컷도 *짧게* 갑니다', duration: 3,
+  { role: 'body', emoji: '📌', subtitle: '세 번째도 *짧게* 갑니다', voice: '세 번째도 짧게 갑니다. 설명보다 예시가 오래 남습니다.', duration: 4,
     visual: { scene: '노을 진 옥상', subject: '직장인', expression: '웃는', action: '컵을 든', camera: 'pan-left', props: ['커피'], mood: 'warm' } },
-  { role: 'body', emoji: '🔁', subtitle: '네 번째 컷에서 *한 번* 비틀기', duration: 3,
+  { role: 'body', emoji: '🔁', subtitle: '네 번째에서 *한 번* 비틀기', voice: '네 번째 컷에서 한 번 비틉니다. 대부분 여기서 고개를 끄덕입니다.', duration: 4.4,
     visual: { scene: '동네 카페 창가', subject: '직장인', expression: '비웃는', action: '팔짱 낀', camera: 'handheld', props: ['커피'], mood: 'comic' } },
-  { role: 'body', emoji: '🎯', subtitle: '다섯 번째 컷은 *마무리* 준비', duration: 2.9,
+  { role: 'body', emoji: '🎯', subtitle: '다섯 번째는 *근거*입니다', voice: '다섯 번째는 근거입니다. 숫자 하나면 충분합니다.', duration: 4,
     visual: { scene: '자취방 주방', subject: '직장인', expression: '지친', action: '머리를 감싼', camera: 'tilt-up', props: ['화분'], mood: 'gloomy' } },
-  { role: 'cta', emoji: '💬', subtitle: '*댓글*로 알려줘요', duration: 3,
+  { role: 'body', emoji: '🧩', subtitle: '여섯 번째, *반전* 준비', voice: '여섯 번째에서 반전을 준비합니다. 지금까지와 반대로 가면 어떻게 될까요.', duration: 4.6,
+    visual: { scene: '회의실', subject: '직장인', expression: '혼란스러운', action: '손가락으로 짚는', camera: 'orbit', props: ['차트'], mood: 'tense' } },
+  { role: 'body', emoji: '💡', subtitle: '핵심은 *순서*라는 것', voice: '핵심은 순서입니다. 같은 일도 순서를 바꾸면 결과가 달라집니다.', duration: 4.4,
+    visual: { scene: 'AI 작업실', subject: '직장인', expression: '무표정', action: '노트북을 보는', camera: 'slide', props: ['노트북'], mood: 'cold' } },
+  { role: 'body', emoji: '📉', subtitle: '반대로 하면 *손해*', voice: '반대로 하면 손해입니다. 시간도 돈도 두 번 씁니다.', duration: 4.2,
+    visual: { scene: '도시의 밤', subject: '직장인', expression: '지친', action: '팔짱 낀', camera: 'pan-right', props: ['지폐'], mood: 'tense' } },
+  { role: 'body', emoji: '🪞', subtitle: '결국 *내 상황*이 답', voice: '결국 내 상황이 답입니다. 남의 기준으로 고르면 오래 못 갑니다.', duration: 4.6,
+    visual: { scene: '자취방 창가', subject: '직장인', expression: '무표정', action: '두 손을 벌린', camera: 'push-in', props: ['시계'], mood: 'bright' } },
+  { role: 'cta', emoji: '💬', subtitle: '*댓글*로 알려줘요', voice: '당신은 어느 쪽이에요? 댓글로 알려주세요.', duration: 3.6,
     visual: { scene: '퇴근길 지하철', subject: '직장인', expression: '뿌듯한', action: '주먹 쥔', camera: 'zoom-out', props: ['휴대폰'], mood: 'hype' } },
 ];
 
@@ -54,7 +63,8 @@ function jsonResponse(payload, status = 200) {
  * (오디오 디코드·믹싱·덕킹 경로는 실제와 똑같이 지나갑니다)
  */
 function stubSpeech(text) {
-  const seconds = Math.min(4, Math.max(0.6, text.length * 0.09));
+  // 실제 낭독 속도(약 7자/초)에 가깝게 — 호흡 블록이 길면 길게 돌려줍니다.
+  const seconds = Math.max(0.6, Math.min(30, text.length / 7.2));
   const rate = 22050;
   const frames = Math.floor(rate * seconds);
   const data = Buffer.alloc(frames * 2);
@@ -83,20 +93,27 @@ function stubSpeech(text) {
   return Buffer.concat([header, data]);
 }
 
+async function openAiSpeechResponse(init) {
+  let input = '';
+  let voice = '';
+  try {
+    const body = JSON.parse(init.body ?? '{}');
+    input = body.input ?? '';
+    voice = body.voice ?? '';
+  } catch {
+    /* 본문 없음 */
+  }
+  const audio = stubSpeech(input);
+  return new Response(audio, {
+    status: 200,
+    headers: { 'content-type': 'audio/mpeg', 'x-test-openai-voice': voice },
+  });
+}
+
 async function speechResponse(target) {
   const url = new URL(String(target));
   const text = url.searchParams.get('q') ?? '';
   const total = Number(url.searchParams.get('total') ?? '1');
-  await mkdir(path.join(here, '.build'), { recursive: true });
-  const logPath = path.join(here, '.build', 'tts-request.json');
-  let log = { calls: [] };
-  try {
-    log = JSON.parse(await readFile(logPath, 'utf-8'));
-  } catch {
-    /* 첫 호출 */
-  }
-  log.calls.push({ text, total, lang: url.searchParams.get('tl') });
-  await writeFile(logPath, JSON.stringify(log, null, 2), 'utf-8');
   if (!text.trim() || text.length > 200) {
     return new Response('bad text', { status: 400 });
   }
@@ -165,12 +182,18 @@ async function boot() {
       const target = String(url);
       if (target.includes(':generateContent')) return geminiResponse(url, init);
       if (target.includes('translate_tts')) return speechResponse(target);
+      if (target.includes('/v1/audio/speech')) return openAiSpeechResponse(init);
       return realFetch(url, init);
     };
 
     if (mode === 'ai') {
       process.env.GEMINI_API_KEY = 'AQ-test-shortcut-mock-000000';
       delete process.env.OPENAI_API_KEY;
+    } else if (mode === 'ttsx') {
+      // 음성 어댑터 검증 — Gemini 키 없이 OpenAI 음성만 있는 서버
+      delete process.env.GEMINI_API_KEY;
+      process.env.OPENAI_API_KEY = 'sk-test-shortcut-tts-000000';
+      process.env.OPENAI_TTS_MODEL = 'gpt-4o-mini-tts';
     } else {
       delete process.env.GEMINI_API_KEY;
       delete process.env.OPENAI_API_KEY;
@@ -194,6 +217,21 @@ async function boot() {
       return;
     }
     if (url.pathname === '/api/tts') {
+      // 앱이 실제로 보낸 요청을 그대로 남깁니다(엔진·보이스·스타일 검증용).
+      const text = url.searchParams.get('text');
+      if (text) {
+        await mkdir(path.join(here, '.build'), { recursive: true });
+        await appendFile(
+          path.join(here, '.build', 'tts-calls.jsonl'),
+          JSON.stringify({
+            text,
+            voice: url.searchParams.get('voice'),
+            style: url.searchParams.get('style'),
+            provider: url.searchParams.get('provider'),
+          }) + '\n',
+          'utf-8',
+        );
+      }
       if (!ttsHandler) {
         res.statusCode = 404;
         res.setHeader('content-type', 'application/json');

@@ -99,8 +99,22 @@ export function cameraFor(index: number): CameraMove {
   return CAMERA_BY_INDEX[index % CAMERA_BY_INDEX.length] ?? 'push';
 }
 
-/** 컷 기본 길이 — 여섯 컷 합계 약 17.8초. */
+/** 완성형 숏폼 대본의 컷 수 범위 — 후킹 1 + 전개 6~9 + 마무리 1. */
+export const MIN_CUTS = 8;
+export const MAX_CUTS = 12;
+export const DEFAULT_CUTS = 10;
+
+/** 예전 6컷 포맷(옛 저장 파일)을 읽을 때 쓰는 기본 길이. */
 export const CUT_DURATIONS = [2.8, 3.0, 3.0, 3.0, 2.9, 3.0];
+
+/** 컷 수에 맞춘 기본 길이 — 열 컷이면 약 45초, 이 컷이면 약 55초가 됩니다. */
+export function defaultDurations(count: number): number[] {
+  return Array.from({ length: count }, (_, index) => {
+    if (index === 0) return 3.2;
+    if (index === count - 1) return 3.6;
+    return 4.4;
+  });
+}
 
 /** 60초 요약처럼 긴 포맷의 컷 길이. */
 export const LONG_DURATIONS = [7.5, 9.5, 9.5, 9.5, 9.5, 9.5];
@@ -123,5 +137,5 @@ export function roleLabel(index: number, total = 6, template?: TemplateId): stri
     if (template === 'love') return '댓글 유도';
     return '저장 유도';
   }
-  return `포인트 ${index}`;
+  return `포인트 ${index + 1}`;
 }

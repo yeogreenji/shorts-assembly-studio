@@ -120,30 +120,34 @@ export function drawEntryBurst(
   scale: number,
   index: number,
 ): void {
-  const span = 0.24 + 0.06 * Math.min(1.6, scale);
+  // 컷 전환은 '훅'에서만 강하게, 나머지는 카메라 무빙에 맡깁니다 — 모든 컷에 번쩍이면 템플릿 티가 납니다.
+  const impact = index === 0 || cut.camera.move === 'punch' || cut.camera.move === 'shake' || cut.camera.move === 'whip';
+  const span = impact ? 0.18 + 0.04 * Math.min(1.6, scale) : 0.11;
   if (local > span) return;
   const k = 1 - local / span;
   const eased = k * k;
   const accent = cut.palette.accent;
 
-  // 화이트 플래시
-  ctx.fillStyle = rgba('#ffffff', 0.4 * eased * Math.min(1.4, 0.7 + 0.5 * scale));
+  // 아주 옅은 플래시 — 컷이 바뀐 것만 알려 줍니다.
+  ctx.fillStyle = rgba('#ffffff', (impact ? 0.2 : 0.09) * eased * Math.min(1.4, 0.7 + 0.5 * scale));
   ctx.fillRect(0, 0, STAGE_W, STAGE_H);
 
-  // 스피드 스트릭 — 컷 방향으로 쓸고 지나갑니다.
+  if (!impact) return;
+
+  // 스피드 스트릭 — 훅·충격 컷에서만 짧게.
   const dir = index % 2 === 0 ? 1 : -1;
   const rng = createRng(`burst#${index}#${cut.art.id}`);
   ctx.save();
   ctx.globalCompositeOperation = 'screen';
   const travel = (1 - eased) * STAGE_W * 1.15;
-  for (let line = 0; line < 14; line += 1) {
+  for (let line = 0; line < 6; line += 1) {
     const y = rng.range(-100, STAGE_H + 100);
     const h = rng.range(3, 16) * (0.5 + scale * 0.5);
     const x = dir > 0 ? -STAGE_W * 0.5 + travel + rng.range(0, 220) : STAGE_W * 1.5 - travel - rng.range(0, 220);
     const width = rng.range(360, 900);
     const gradient = ctx.createLinearGradient(x, y, x + dir * width, y);
     gradient.addColorStop(0, rgba(accent, 0));
-    gradient.addColorStop(0.5, rgba('#ffffff', 0.35 * eased));
+    gradient.addColorStop(0.5, rgba('#ffffff', 0.16 * eased));
     gradient.addColorStop(1, rgba(accent, 0));
     ctx.fillStyle = gradient;
     ctx.fillRect(dir > 0 ? x : x - width, y, width, h);

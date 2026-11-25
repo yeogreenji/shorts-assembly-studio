@@ -101,8 +101,8 @@ export function drawCaption(
   const widest = Math.max(...lineWidths, 10);
 
   // 컷 시작의 "탁" — 아주 짧게 크게 떴다가 제자리로.
-  const slam = 1 + 0.07 * Math.exp(-11 * Math.max(0, elapsed));
-  const slamDrop = 26 * Math.exp(-13 * Math.max(0, elapsed));
+  const slam = 1 + 0.032 * Math.exp(-11 * Math.max(0, elapsed));
+  const slamDrop = 14 * Math.exp(-13 * Math.max(0, elapsed));
 
   ctx.translate(centerX, bottom - totalHeight + slamDrop);
   ctx.scale(slam, slam);
@@ -165,7 +165,7 @@ export function drawCaption(
       const land = delay + 0.3;
       const after = Math.max(0, elapsed - land);
       const pulse = word.highlighted ? 1 + 0.05 * Math.sin(after * 13) * Math.exp(-after * 3.4) : 1;
-      const jitter = word.highlighted && theme !== 'minimal' ? Math.sin(after * 38) * 2.4 * Math.exp(-after * 9) : 0;
+      const jitter = word.highlighted && theme !== 'minimal' ? Math.sin(after * 38) * 1.1 * Math.exp(-after * 9) : 0;
 
       ctx.save();
       ctx.globalAlpha = opacity * clamp01(u * 2.4);
@@ -183,7 +183,7 @@ export function drawCaption(
         ctx.shadowBlur = word.highlighted ? 40 : 22;
       } else if (word.highlighted && theme !== 'minimal') {
         ctx.shadowColor = rgba(accent, 0.75);
-        ctx.shadowBlur = 24 + 14 * Math.sin(after * 9);
+        ctx.shadowBlur = 13;
       } else if (theme === 'minimal') {
         ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
         ctx.shadowBlur = 10;
@@ -309,22 +309,6 @@ export function drawHud(
   ctx.fillStyle = rgba('#ffffff', 0.94);
   ctx.textAlign = 'left';
   ctx.fillText(text, chipX + 19, chipY + chipH / 2 + 1);
-  ctx.restore();
-
-  // 컷 번호
-  ctx.save();
-  ctx.font = `800 ${28 * fontScale}px Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif`;
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'right';
-  const badgeW = 120;
-  const badgeH = 48 * fontScale;
-  const badgeX = 1080 - pad - badgeW;
-  ctx.fillStyle = rgba('#000000', 0.46);
-  ctx.beginPath();
-  ctx.roundRect(badgeX, chipY, badgeW, badgeH, badgeH / 2);
-  ctx.fill();
-  ctx.fillStyle = rgba('#ffffff', 0.82);
-  ctx.fillText(`${index + 1}/${count}`, badgeX + badgeW - 19, chipY + badgeH / 2 + 1);
   ctx.restore();
 }
 

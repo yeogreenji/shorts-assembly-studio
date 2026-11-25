@@ -49,7 +49,7 @@ export function TopicPanel({ studio }: { studio: Studio }) {
             aria-describedby="topic-hint"
           />
           <p id="topic-hint" className="mt-1.5 text-[10px] leading-relaxed text-mist-600">
-            Enter로 바로 만들기 · 밸런스는 “A vs B”가 정확합니다
+            Enter로 바로 만들기 · 밸런스는 “A vs B”가 정확합니다 · 기본 10컷(35~60초)
           </p>
         </div>
 
@@ -114,12 +114,12 @@ export function TopicPanel({ studio }: { studio: Studio }) {
           {generating ? (
             <>
               <span className="h-3 w-3 animate-spin rounded-full border-2 border-mist-600 border-t-ink-950" aria-hidden="true" />
-              {aiReady ? 'AI가 6컷 쓰는 중' : '6컷 조립 중'}
+              {aiReady ? 'AI가 대본 쓰는 중' : '완성형 대본 조립 중'}
             </>
           ) : (
             <>
-              <Icon name="sparkles" size={14} />
-              6컷 쇼츠 만들기
+              <Icon name="film" size={14} />
+              쇼츠 대본 만들기
             </>
           )}
         </button>
@@ -135,7 +135,7 @@ export function TopicPanel({ studio }: { studio: Studio }) {
         <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] text-mist-600">
           <span className="text-mist-400">{TONE_LABEL[tone]} 톤</span>
           <span aria-hidden="true">·</span>
-          <span>{shorts.cuts.length}컷</span>
+          <span>{shorts.cuts.length}컷 완성형</span>
           <span aria-hidden="true">·</span>
           <span className="mono">{totalSeconds.toFixed(1)}초</span>
         </p>

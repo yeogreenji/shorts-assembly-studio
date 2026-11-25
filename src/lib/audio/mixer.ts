@@ -8,6 +8,8 @@ import type { VoicePreset } from './tts';
  *
  * 두 소리가 같은 AudioContext·같은 시계를 쓰기 때문에 컷 시작 시각에 음성을 정확히 놓을 수 있고,
  * 음성이 나오는 동안 배경음을 자동으로 낮추는 덕킹(ducking)도 같은 곳에서 처리합니다.
+ * 음성은 고역을 살짝 눌러 주고 중저역을 보강한 뒤 아주 짧은 방(room)을 더해,
+ * 브라우저 TTS 특유의 '건조하고 로봇 같은' 느낌을 줄입니다.
  */
 
 export interface Sink {
@@ -16,8 +18,10 @@ export interface Sink {
 }
 
 export interface VoicePlayOptions {
-  /** 재생 배속(피치도 같이 올라갑니다 — 숏폼 톤) */
+  /** 재생 배속(목소리 전체가 빨라집니다) */
   rate?: number;
+  /** 음높이(센트). -120이면 한 반음쯤 낮게 — 배속과 함께 살짝 달라집니다 */
+  tone?: number;
   /** 0~1 */
   gain?: number;
   /** 이 초만큼 건너뛰고 재생(컷 중간부터 재생할 때) */
@@ -26,8 +30,12 @@ export interface VoicePlayOptions {
   lowShelf?: number;
   /** 낮은 톤 프리셋이 쓰는 고역 정리 */
   lowpass?: number;
+  /** 중저역 온기(dB) — 목소리에 몸통을 더합니다 */
+  warmth?: number;
   /** 이 음성이 나오는 동안 배경음을 낮출지 */
   duck?: boolean;
+  /** 이 시간을 넘기면 소리를 끊습니다(컷 끝을 넘겨 겹치지 않게) */
+  maxSeconds?: number;
 }
 
 export interface VoicePlayback {
@@ -55,12 +63,30 @@ function audioContextCtor(): typeof AudioContext | null {
   );
 }
 
+/** 아주 짧은 방 울림(0.55초, 지수 감쇠) — 목소리가 벽에 부딪힌 듯한 공기를 더합니다. */
+function roomImpulse(ctx: AudioContext): AudioBuffer {
+  const seconds = 0.55;
+  const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
+  const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
+  for (let channel = 0; channel < 2; channel += 1) {
+    const data = buffer.getChannelData(channel);
+    for (let index = 0; index < length; index += 1) {
+      const decay = Math.pow(1 - index / length, 3.2);
+      data[index] = (Math.random() * 2 - 1) * decay * 0.5;
+    }
+  }
+  return buffer;
+}
+
 export class AudioMixer {
   private ctx: AudioContext | null = null;
   private bgmBus: GainNode | null = null;
   private voiceBus: GainNode | null = null;
   private dest: MediaStreamAudioDestinationNode | null = null;
   private closing = false;
+  private reverb: ConvolverNode | null = null;
+  /** 살아 있는 음성 소스 — 일시정지·이동 때 실제로 끊습니다(블록 음성이 길어도). */
+  private voices = new Set<{ source: AudioBufferSourceNode; gain: GainNode }>();
   /** 덕킹이 걸렸다 풀리는 중인지 — 연속 컷에서 배경음이 다시 올라오지 않게 합니다. */
   private duckingUntil = 0;
 
@@ -114,6 +140,18 @@ export class AudioMixer {
       this.ctx = ctx;
       this.bgmBus = bgmBus;
       this.voiceBus = voiceBus;
+      // 목소리 전용 방 울림 — 마른 소리를 조금 데웁니다.
+      try {
+        const convolver = ctx.createConvolver();
+        convolver.buffer = roomImpulse(ctx);
+        const wet = ctx.createGain();
+        wet.gain.value = 0.055;
+        convolver.connect(wet);
+        wet.connect(voiceBus);
+        this.reverb = convolver;
+      } catch {
+        this.reverb = null;
+      }
       return ctx;
     } catch {
       return null;
@@ -148,9 +186,11 @@ export class AudioMixer {
     const ctx = this.ensure();
     const bus = this.voiceBus;
     if (!ctx || !bus) return null;
-    const rate = Math.max(0.5, Math.min(2, (options.rate ?? 1) * preset.rate));
+    const tone = Math.max(-240, Math.min(240, options.tone ?? 0));
+    const rate = Math.max(0.5, Math.min(2, (options.rate ?? 1) * preset.rate * Math.pow(2, tone / 1200)));
     const offset = Math.max(0, Math.min(buffer.duration - 0.01, options.offset ?? 0));
-    const duration = Math.max(0.05, (buffer.duration - offset) / rate);
+    const natural = Math.max(0.05, (buffer.duration - offset) / rate);
+    const duration = Math.min(natural, Math.max(0.2, options.maxSeconds ?? natural));
     const when = Math.max(ctx.currentTime + 0.005, at ?? ctx.currentTime + 0.01);
 
     const source = ctx.createBufferSource();
@@ -158,14 +198,52 @@ export class AudioMixer {
     source.playbackRate.value = rate;
 
     const gain = ctx.createGain();
-    gain.gain.value = Math.max(0, Math.min(1.5, options.gain ?? 1));
+    const target = Math.max(0, Math.min(1.5, options.gain ?? 1));
+    gain.gain.value = target;
 
     let tail: AudioNode = gain;
+    // 1) 70Hz 아래 럼블 정리 — 스피커에서 웅웅거리는 소리를 없앱니다.
+    try {
+      const highpass = ctx.createBiquadFilter();
+      highpass.type = 'highpass';
+      highpass.frequency.value = 70;
+      highpass.Q.value = 0.6;
+      tail.connect(highpass);
+      tail = highpass;
+    } catch {
+      /* 필터를 못 만드는 환경 */
+    }
+    // 2) 말소리 존재감(2.6kHz) 아주 살짝 — 자막을 읽는 목소리가 또렷해집니다.
+    try {
+      const presence = ctx.createBiquadFilter();
+      presence.type = 'peaking';
+      presence.frequency.value = 2600;
+      presence.Q.value = 0.9;
+      presence.gain.value = 1.2;
+      tail.connect(presence);
+      tail = presence;
+    } catch {
+      /* 필터를 못 만드는 환경 */
+    }
+    // 3) 온기(중저역) — 화자 스타일마다 다릅니다.
+    const warmth = options.warmth ?? 1.2;
+    if (warmth > 0.05) {
+      try {
+        const body = ctx.createBiquadFilter();
+        body.type = 'lowshelf';
+        body.frequency.value = 260;
+        body.gain.value = Math.min(4, warmth);
+        tail.connect(body);
+        tail = body;
+      } catch {
+        /* 필터를 못 만드는 환경 */
+      }
+    }
     if (options.lowpass && options.lowpass > 0) {
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
       filter.frequency.value = options.lowpass;
-      gain.connect(filter);
+      tail.connect(filter);
       tail = filter;
     }
     if (options.lowShelf && options.lowShelf > 0) {
@@ -176,14 +254,21 @@ export class AudioMixer {
       tail.connect(shelf);
       tail = shelf;
     }
-    // 말이 끝나는 순간 딱 끊기지 않게 아주 짧게 여운을 남깁니다.
-    gain.gain.setValueAtTime(gain.gain.value, when);
-    gain.gain.setValueAtTime(gain.gain.value, when + Math.max(0.05, duration - 0.04));
+    // 4) 말이 끝나는 순간 딱 끊기지 않게 아주 짧게 여운을 남깁니다.
+    const hold = Math.max(0.05, duration - 0.05);
+    gain.gain.setValueAtTime(target, when);
+    gain.gain.setValueAtTime(target, when + hold);
+    gain.gain.linearRampToValueAtTime(0.001, when + duration + 0.02);
     tail.connect(bus);
+    if (this.reverb) tail.connect(this.reverb);
     source.connect(gain);
     source.start(when, offset);
-    source.stop(when + duration + 0.02);
+    source.stop(when + duration + 0.04);
+
+    const entry = { source, gain };
+    this.voices.add(entry);
     source.onended = () => {
+      this.voices.delete(entry);
       try {
         source.disconnect();
         gain.disconnect();
@@ -200,31 +285,49 @@ export class AudioMixer {
   }
 
   /** at~until 동안 배경음을 낮춥니다(음성 구간). 앞뒤로 120ms 페이드. */
-  duck(at: number, until: number, depth = 0.32): void {
+  duck(at: number, until: number, depth = 0.3): void {
     const ctx = this.ctx;
     const bus = this.bgmBus;
     if (!ctx || !bus) return;
-    const start = Math.max(ctx.currentTime, at - 0.12);
-    const end = Math.max(start + 0.08, until + 0.16);
+    const start = Math.max(ctx.currentTime, at - 0.14);
+    const end = Math.max(start + 0.08, until + 0.22);
     if (start < this.duckingUntil - 0.02) {
       // 이미 낮아져 있는 구간에 다음 음성이 붙으면, 올렸다 내리지 않고 이어서 낮게 둡니다.
       bus.gain.setTargetAtTime(depth, start, 0.05);
-      bus.gain.setTargetAtTime(1, end, 0.12);
+      bus.gain.setTargetAtTime(1, end, 0.13);
     } else {
-      bus.gain.setTargetAtTime(depth, start, 0.06);
-      bus.gain.setTargetAtTime(1, end, 0.14);
+      bus.gain.setTargetAtTime(depth, start, 0.07);
+      bus.gain.setTargetAtTime(1, end, 0.16);
     }
     this.duckingUntil = end;
     audioStats().ducks += 1;
   }
 
+  /** 지금 나오는 음성을 실제로 끊습니다 — 일시정지·위치 이동·음소거. */
   stopVoices(): void {
-    // 소스 노드는 스스로 끝나므로 버스만 잠깐 음소거했다 되돌립니다.
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const at = ctx.currentTime;
+    for (const entry of [...this.voices]) {
+      try {
+        entry.gain.gain.cancelScheduledValues(at);
+        entry.gain.gain.setTargetAtTime(0.001, at, 0.012);
+        entry.source.stop(at + 0.06);
+      } catch {
+        /* 이미 끝난 소스 */
+      }
+      this.voices.delete(entry);
+    }
+    this.duckingUntil = 0;
+  }
+
+  /** 미리보기에서 다른 소리를 잠깐 죽일 때(미리듣기 전환). */
+  muteVoicesFor(ms = 250): void {
     const ctx = this.ctx;
     const bus = this.voiceBus;
     if (!ctx || !bus) return;
     bus.gain.setTargetAtTime(0, ctx.currentTime, 0.02);
-    bus.gain.setTargetAtTime(1, ctx.currentTime + 0.25, 0.04);
+    bus.gain.setTargetAtTime(1, ctx.currentTime + ms / 1000, 0.04);
   }
 
   close(): void {
@@ -234,6 +337,8 @@ export class AudioMixer {
     this.bgmBus = null;
     this.voiceBus = null;
     this.dest = null;
+    this.reverb = null;
+    this.voices.clear();
     if (ctx) {
       try {
         void ctx.close();
